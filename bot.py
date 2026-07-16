@@ -433,7 +433,7 @@ def animate_case(call, case_type):
     try:
         message = call.message
         case_name, emoji = get_case_name(case_type)
-        
+
         animation_frames = [
             ['🎰', '🎲', '✨'],
             ['✨', '🎰', '🎲'],
@@ -442,37 +442,48 @@ def animate_case(call, case_type):
             ['💫', '🌟', '⭐'],
             ['🌟', '⭐', '💫']
         ]
-        
+
         anim_msg = bot.send_message(
-            message.chat.id, 
+            message.chat.id,
             f"{emoji} **Открываем {case_name}...**\n\n"
-            f"🌀 Подготовка..."
+            f"🌀 Подготовка...",
+            parse_mode="Markdown"
         )
-        
+
         for frame in animation_frames:
             time.sleep(0.3)
             bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=anim_msg.message_id,
-                text=f"{emoji} **Открываем {case_name}...**\n\n"
-                     f"{' '.join(frame)}",
-                parse_mode='Markdown'
+                text=f"{emoji} **Открываем {case_name}...**\n\n{' '.join(frame)}",
+                parse_mode="Markdown"
             )
-        
+
+        # Выпавший предмет
         item_id, item_name = open_case(case_type)
-        
+
+        # Загружаем пользователя
         user_data = get_user(message.chat.id)
-        inventory = user_data['inventory']
-        
-        if item_id in inventory:
-            inventory[item_id]['count'] += 1
+        inventory = user_data["inventory"]
+
+        # Уникальный ключ предмета
+        inventory_key = f"{case_type}_{item_id}"
+
+        if inventory_key in inventory:
+            inventory[inventory_key]["count"] += 1
         else:
-            inventory[item_id] = {'name': item_name, 'count': 1, 'type': case_type}
-        
-        update_user(message.chat.id, user_data['stars'], inventory)
-        
+            inventory[inventory_key] = {
+                "name": item_name,
+                "count": 1,
+                "type": case_type
+            }
+
+        # Сохраняем
+        update_user(message.chat.id, user_data["stars"], inventory)
+
+        # Цена предмета
         price = get_item_price(item_id, case_type)
-        
+
         if price >= 1000000:
             rarity = "🔥🔥🔥 **ЛЕГЕНДАРНО!** 🔥🔥🔥"
         elif price >= 50000:
@@ -481,24 +492,26 @@ def animate_case(call, case_type):
             rarity = "🌟 **РЕДКИЙ ПРЕДМЕТ!** 🌟"
         else:
             rarity = "📦 Обычный предмет"
-        
-        final_text = f"{rarity}\n\n"
-        final_text += f"🎉 Вам выпало: **{item_name}**\n"
-        final_text += f"💰 Цена продажи: **{price:,}** ⭐\n"
-        final_text += f"\n💡 Предмет добавлен в инвентарь!"
-        
+
+        final_text = (
+            f"{rarity}\n\n"
+            f"🎉 Вам выпало: **{item_name}**\n"
+            f"💰 Цена продажи: **{price:,}** ⭐\n\n"
+            f"💡 Предмет добавлен в инвентарь!"
+        )
+
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=anim_msg.message_id,
             text=final_text,
-            parse_mode='Markdown'
+            parse_mode="Markdown"
         )
-        
+
         time.sleep(0.5)
         show_main_menu(message.chat.id)
+
     except Exception as e:
         print(f"❌ Ошибка в animate_case: {e}")
-
 # ================= КЛАВИАТУРЫ =================
 def main_menu_keyboard(user_id):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
@@ -570,7 +583,8 @@ def sell_keyboard(user_id):
             return keyboard
         
         for item_id, data in inventory.items():
-            price = get_item_price(item_id, data['type'])
+            real_item_id = item_id.split("_")[1]
+            price = get_item_price(real_item_id, data["type"])
             if price >= 1000000:
                 rarity = "💎💎💎"
             elif price >= 50000:
@@ -727,7 +741,8 @@ def callback_handler(call):
             
             if user_data['inventory']:
                 for item_id, data in user_data['inventory'].items():
-                    price = get_item_price(item_id, data['type'])
+                    real_item_id = item_id.split("_")[1]
+                    price = get_item_price(real_item_id, data["type"])
                     total_value += price * data['count']
                     total_items += data['count']
                     if price >= 1000000:
@@ -775,10 +790,11 @@ def callback_handler(call):
             )
         
         elif call.data.startswith("sell_"):
-            item_id = call.data.split("_")[1]
+            item_id = call.data.replace("sell_", "", 1)
             if item_id in user_data['inventory']:
                 item = user_data['inventory'][item_id]
-                price = get_item_price(item_id, item['type'])
+                real_item_id = item_id.split("_")[1]
+                price = get_item_price(real_item_id, item["type"])
                 
                 if price >= 1000000:
                     confirm = types.InlineKeyboardMarkup()
@@ -815,10 +831,11 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id, "❌ Этого предмета больше нет!", show_alert=True)
         
         elif call.data.startswith("confirm_sell_"):
-            item_id = call.data.split("_")[2]
+            item_id = call.data.replace("confirm_sell_", "", 1)
             if item_id in user_data['inventory']:
                 item = user_data['inventory'][item_id]
-                price = get_item_price(item_id, item['type'])
+                real_item_id = item_id.split("_")[1]
+                price = get_item_price(real_item_id, item["type"])
                 
                 item['count'] -= 1
                 if item['count'] <= 0:
