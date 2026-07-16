@@ -6,14 +6,20 @@ import threading
 import psycopg2
 import json
 import os
+import sys
 from psycopg2.extras import RealDictCursor
+from urllib.parse import urlparse
 
 # ================= КОНФИГ =================
-TOKEN = os.environ.get('BOT_TOKEN', 'ТВОЙ_ТОКЕН_СЮДА')
+TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 123456789))
 
-if not os.path.exists('data'):
-    os.makedirs('data')
+if not TOKEN:
+    print("❌ Ошибка: BOT_TOKEN не найден в переменных окружения!")
+    sys.exit(1)
+
+print("🤖 Бот запускается...")
+print(f"👑 Админ ID: {ADMIN_ID}")
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -93,74 +99,90 @@ PRICES = {
 
 # ================= ПОДКЛЮЧЕНИЕ К БАЗЕ =================
 def get_db_connection():
-    """Подключение к PostgreSQL на Railway"""
+    """Подключение к PostgreSQL на Railway через DATABASE_URL"""
     database_url = os.environ.get('DATABASE_URL')
+    
     if database_url:
-        return psycopg2.connect(database_url, sslmode='require')
+        try:
+            conn = psycopg2.connect(database_url, sslmode='require')
+            return conn
+        except Exception as e:
+            print(f"❌ Ошибка подключения к PostgreSQL: {e}")
+            raise
     else:
-        return psycopg2.connect(
-            host=os.environ.get('DB_HOST', 'localhost'),
-            database=os.environ.get('DB_NAME', 'game_bot'),
-            user=os.environ.get('DB_USER', 'postgres'),
-            password=os.environ.get('DB_PASSWORD', 'password'),
-            port=os.environ.get('DB_PORT', 5432)
-        )
+        print("❌ DATABASE_URL не найден!")
+        raise Exception("DATABASE_URL not found")
 
 def init_db():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            stars INTEGER DEFAULT 15,
-            inventory TEXT DEFAULT '{}',
-            username TEXT DEFAULT ''
-        )
-    ''')
-    
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS promocodes (
-            code TEXT PRIMARY KEY,
-            type TEXT,
-            item_id TEXT,
-            stars INTEGER DEFAULT 0,
-            uses INTEGER DEFAULT 1,
-            used_by TEXT DEFAULT '[]'
-        )
-    ''')
-    
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS cases (
-            case_id TEXT PRIMARY KEY,
-            name TEXT,
-            enabled INTEGER DEFAULT 1,
-            price INTEGER DEFAULT 0,
-            is_temporary INTEGER DEFAULT 0,
-            emoji TEXT DEFAULT '🎁'
-        )
-    ''')
-    
-    default_cases = [
-        ('free', '🗑️ Кейс Бомжа', 1, 0, 0, '🗑️'),
-        ('premium', '💎 Премиум Кейс', 1, 100, 0, '💎'),
-        ('halloween', '🎃 Хеллоуинский Кейс', 0, 150, 1, '🎃'),
-        ('newyear', '🎄 Новогодний Кейс', 0, 150, 1, '🎄'),
-        ('legendary', '⚡ Легендарный Кейс', 1, 500, 0, '⚡'),
-        ('pepe', '🐸 PePe праздник🔥', 1, 100000, 0, '🐸')
-    ]
-    
-    for case in default_cases:
+    """Инициализация таблиц в базе данных"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Таблица пользователей
         cur.execute('''
-            INSERT INTO cases (case_id, name, enabled, price, is_temporary, emoji) 
-            VALUES (%s, %s, %s, %s, %s, %s) 
-            ON CONFLICT (case_id) DO NOTHING
-        ''', case)
-    
-    conn.commit()
-    cur.close()
-    conn.close()
-    print("✅ База данных PostgreSQL инициализирована")
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                stars INTEGER DEFAULT 15,
+                inventory TEXT DEFAULT '{}',
+                username TEXT DEFAULT ''
+            )
+        ''')
+        
+        # Таблица промокодов
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS promocodes (
+                code TEXT PRIMARY KEY,
+                type TEXT,
+                item_id TEXT,
+                stars INTEGER DEFAULT 0,
+                uses INTEGER DEFAULT 1,
+                used_by TEXT DEFAULT '[]'
+            )
+        ''')
+        
+        # Таблица кейсов
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS cases (
+                case_id TEXT PRIMARY KEY,
+                name TEXT,
+                enabled INTEGER DEFAULT 1,
+                price INTEGER DEFAULT 0,
+                is_temporary INTEGER DEFAULT 0,
+                emoji TEXT DEFAULT '🎁'
+            )
+        ''')
+        
+        # Проверяем есть ли кейсы
+        cur.execute('SELECT COUNT(*) FROM cases')
+        count = cur.fetchone()[0]
+        
+        if count == 0:
+            # Добавляем кейсы только если их нет
+            default_cases = [
+                ('free', '🗑️ Кейс Бомжа', 1, 0, 0, '🗑️'),
+                ('premium', '💎 Премиум Кейс', 1, 100, 0, '💎'),
+                ('halloween', '🎃 Хеллоуинский Кейс', 1, 150, 1, '🎃'),
+                ('newyear', '🎄 Новогодний Кейс', 1, 150, 1, '🎄'),
+                ('legendary', '⚡ Легендарный Кейс', 1, 500, 0, '⚡'),
+                ('pepe', '🐸 PePe праздник🔥', 1, 100000, 0, '🐸')
+            ]
+            
+            for case in default_cases:
+                cur.execute('''
+                    INSERT INTO cases (case_id, name, enabled, price, is_temporary, emoji) 
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                ''', case)
+            print("✅ Добавлены кейсы по умолчанию")
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("✅ База данных инициализирована")
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка инициализации базы данных: {e}")
+        return False
 
 def get_user(user_id):
     try:
@@ -224,7 +246,8 @@ def get_all_users():
         cur.close()
         conn.close()
         return [user[0] for user in users]
-    except:
+    except Exception as e:
+        print(f"❌ Ошибка в get_all_users: {e}")
         return []
 
 def get_all_users_data():
@@ -236,7 +259,8 @@ def get_all_users_data():
         cur.close()
         conn.close()
         return users
-    except:
+    except Exception as e:
+        print(f"❌ Ошибка в get_all_users_data: {e}")
         return []
 
 def is_case_enabled(case_id):
@@ -248,7 +272,8 @@ def is_case_enabled(case_id):
         cur.close()
         conn.close()
         return result and result[0] == 1
-    except:
+    except Exception as e:
+        print(f"❌ Ошибка в is_case_enabled: {e}")
         return False
 
 def get_case_price(case_id):
@@ -260,7 +285,8 @@ def get_case_price(case_id):
         cur.close()
         conn.close()
         return result[0] if result else 0
-    except:
+    except Exception as e:
+        print(f"❌ Ошибка в get_case_price: {e}")
         return 0
 
 def get_case_name(case_id):
@@ -272,7 +298,8 @@ def get_case_name(case_id):
         cur.close()
         conn.close()
         return (result[0], result[1]) if result else (case_id, '🎁')
-    except:
+    except Exception as e:
+        print(f"❌ Ошибка в get_case_name: {e}")
         return (case_id, '🎁')
 
 def get_item_price(item_id, case_type):
@@ -309,7 +336,8 @@ def create_promocode(code, type, item_id=None, stars=0, uses=1):
         cur.close()
         conn.close()
         return True
-    except:
+    except Exception as e:
+        print(f"❌ Ошибка в create_promocode: {e}")
         return False
 
 def delete_promocode(code):
@@ -321,7 +349,8 @@ def delete_promocode(code):
         cur.close()
         conn.close()
         return True
-    except:
+    except Exception as e:
+        print(f"❌ Ошибка в delete_promocode: {e}")
         return False
 
 def get_all_promocodes():
@@ -333,7 +362,8 @@ def get_all_promocodes():
         cur.close()
         conn.close()
         return codes
-    except:
+    except Exception as e:
+        print(f"❌ Ошибка в get_all_promocodes: {e}")
         return []
 
 def use_promocode(code, user_id):
@@ -482,7 +512,8 @@ def main_menu_keyboard(user_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute('SELECT case_id, name, price, emoji FROM cases WHERE enabled = 1 AND case_id NOT IN ("free", "premium", "legendary")')
+        cur.execute('SELECT case_id, name, price, emoji FROM cases WHERE enabled = 1 AND case_id NOT IN (%s, %s, %s)', 
+                   ('free', 'premium', 'legendary'))
         temp_cases = cur.fetchall()
         cur.close()
         conn.close()
@@ -491,8 +522,8 @@ def main_menu_keyboard(user_id):
             price_text = "Бесплатно" if case[2] == 0 else f"{case[2]:,} ⭐".replace(',', ' ')
             emoji = case[3] if len(case) > 3 else '🎁'
             cases.append((case[0], f"{emoji} {case[1]} ({price_text})"))
-    except:
-        pass
+    except Exception as e:
+        print(f"❌ Ошибка в main_menu_keyboard: {e}")
     
     for case_id, label in cases:
         btn = types.InlineKeyboardButton(label, callback_data=f"case_{case_id}")
@@ -559,7 +590,8 @@ def sell_keyboard(user_id):
         
         keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back"))
         return keyboard
-    except:
+    except Exception as e:
+        print(f"❌ Ошибка в sell_keyboard: {e}")
         keyboard = types.InlineKeyboardMarkup()
         keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back"))
         return keyboard
@@ -580,21 +612,21 @@ def admin_cases_keyboard():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute('SELECT case_id, name, enabled, emoji, is_temporary FROM cases')
+        cur.execute('SELECT case_id, name, enabled, emoji, is_temporary FROM cases ORDER BY case_id')
         cases = cur.fetchall()
         cur.close()
         conn.close()
         
         for case_id, name, enabled, emoji, is_temporary in cases:
-            status = "✅ Включен" if enabled else "❌ Выключен"
-            temp_tag = " 🕐" if is_temporary else ""
+            status = "✅ Включен" if enabled == 1 else "❌ Выключен"
+            temp_tag = " 🕐" if is_temporary == 1 else ""
             btn = types.InlineKeyboardButton(
                 f"{emoji} {name}{temp_tag} - {status}",
                 callback_data=f"admin_toggle_case_{case_id}"
             )
             keyboard.add(btn)
-    except:
-        pass
+    except Exception as e:
+        print(f"❌ Ошибка в admin_cases_keyboard: {e}")
     
     keyboard.add(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_back"))
     return keyboard
@@ -665,6 +697,7 @@ def callback_handler(call):
         user_id = call.message.chat.id
         user_data = get_user(user_id)
         
+        # --- КЕЙСЫ ---
         if call.data.startswith("case_"):
             case_id = call.data.split("_")[1]
             
@@ -686,6 +719,7 @@ def callback_handler(call):
                 bot.delete_message(user_id, call.message.message_id)
                 threading.Thread(target=animate_case, args=(call, case_id)).start()
         
+        # --- ПРОФИЛЬ ---
         elif call.data == "profile":
             inv_text = ""
             total_items = 0
@@ -729,6 +763,7 @@ def callback_handler(call):
                 )
             )
         
+        # --- ПРОДАЖА ---
         elif call.data == "sell":
             keyboard = sell_keyboard(user_id)
             bot.edit_message_text(
@@ -803,6 +838,7 @@ def callback_handler(call):
                     reply_markup=keyboard
                 )
         
+        # --- ЛИДЕРЫ ---
         elif call.data == "leaderboard":
             users = get_all_users_data()
             text = "🏆 **Топ игроков по звездам:**\n\n"
@@ -824,6 +860,7 @@ def callback_handler(call):
                 )
             )
         
+        # --- ПРОМОКОД ---
         elif call.data == "promocode":
             bot.edit_message_text(
                 chat_id=user_id,
@@ -836,10 +873,12 @@ def callback_handler(call):
             )
             bot.register_next_step_handler(call.message, process_promocode)
         
+        # --- НАЗАД ---
         elif call.data == "back":
             bot.delete_message(user_id, call.message.message_id)
             show_main_menu(user_id)
         
+        # --- АДМИН ПАНЕЛЬ ---
         elif call.data == "admin_back":
             bot.delete_message(user_id, call.message.message_id)
             admin_panel(call.message)
@@ -953,27 +992,46 @@ def callback_handler(call):
         
         elif call.data.startswith("admin_toggle_case_"):
             case_id = call.data.split("_")[3]
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute('SELECT enabled FROM cases WHERE case_id = %s', (case_id,))
-            current = cur.fetchone()[0]
-            new_status = 0 if current else 1
-            cur.execute('UPDATE cases SET enabled = %s WHERE case_id = %s', (new_status, case_id))
-            conn.commit()
-            cur.close()
-            conn.close()
+            print(f"🔄 Переключение кейса: {case_id}")
             
-            status_text = "включен" if new_status else "выключен"
-            bot.answer_callback_query(call.id, f"✅ Кейс {status_text}!", show_alert=False)
-            
-            keyboard = admin_cases_keyboard()
-            bot.edit_message_text(
-                chat_id=user_id,
-                message_id=call.message.message_id,
-                text="🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                
+                # Получаем текущее состояние
+                cur.execute('SELECT enabled FROM cases WHERE case_id = %s', (case_id,))
+                result = cur.fetchone()
+                
+                if result:
+                    current = result[0]
+                    new_status = 0 if current == 1 else 1
+                    
+                    # Обновляем
+                    cur.execute('UPDATE cases SET enabled = %s WHERE case_id = %s', (new_status, case_id))
+                    conn.commit()
+                    
+                    status_text = "включен" if new_status == 1 else "выключен"
+                    print(f"✅ Кейс {case_id} {status_text}")
+                    
+                    bot.answer_callback_query(call.id, f"✅ Кейс {status_text}!", show_alert=False)
+                    
+                    # Обновляем клавиатуру
+                    keyboard = admin_cases_keyboard()
+                    bot.edit_message_text(
+                        chat_id=user_id,
+                        message_id=call.message.message_id,
+                        text="🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
+                        parse_mode='Markdown',
+                        reply_markup=keyboard
+                    )
+                else:
+                    bot.answer_callback_query(call.id, "❌ Кейс не найден!", show_alert=True)
+                
+                cur.close()
+                conn.close()
+            except Exception as e:
+                print(f"❌ Ошибка при переключении кейса: {e}")
+                bot.answer_callback_query(call.id, f"❌ Ошибка: {str(e)}", show_alert=True)
     
     except Exception as e:
         print(f"❌ Ошибка в callback_handler: {e}")
