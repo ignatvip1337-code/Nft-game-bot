@@ -100,32 +100,32 @@ ITEMS = {
     }
 }
 
-# ================= ШАНСЫ ВЫПАДЕНИЯ =================
+# ================= НОВЫЕ ШАНСЫ ВЫПАДЕНИЯ (УМЕНЬШЕНЫ) =================
 CHANCES = {
-    'free': {'1': 35, '2': 25, '3': 20, '4': 15, '5': 5},
-    'premium': {'1': 30, '2': 25, '3': 20, '4': 15, '5': 10},
-    'legendary': {'1': 25, '2': 20, '3': 20, '4': 20, '5': 15},
-    'halloween': {'1': 25, '2': 20, '3': 20, '4': 20, '5': 15},
-    'newyear': {'1': 20, '2': 20, '3': 20, '4': 20, '5': 20},
-    'mythical': {'1': 20, '2': 20, '3': 20, '4': 20, '5': 3},
-    'elite': {'1': 50, '2': 25, '3': 15, '4': 7, '5': 3},
-    'cosmic': {'1': 50, '2': 25, '3': 15, '4': 7, '5': 3},
-    'pepe': {'1': 50, '2': 25, '3': 15, '4': 7, '5': 3}
+    'free': {'1': 40, '2': 30, '3': 20, '4': 8, '5': 2},
+    'premium': {'1': 35, '2': 28, '3': 20, '4': 12, '5': 5},
+    'legendary': {'1': 30, '2': 25, '3': 20, '4': 15, '5': 10},
+    'halloween': {'1': 28, '2': 24, '3': 20, '4': 16, '5': 12},
+    'newyear': {'1': 25, '2': 22, '3': 20, '4': 18, '5': 15},
+    'mythical': {'1': 25, '2': 22, '3': 20, '4': 18, '5': 15},
+    'elite': {'1': 22, '2': 20, '3': 20, '4': 20, '5': 18},
+    'cosmic': {'1': 20, '2': 18, '3': 18, '4': 22, '5': 22},
+    'pepe': {'1': 35, '2': 28, '3': 20, '4': 12, '5': 5}
 }
 
-PEPE_LEGENDARY_CHANCE = 1
+PEPE_LEGENDARY_CHANCE = 1  # 1% шанс на легендарного пепе
 
-# ================= ЦЕНЫ ПРОДАЖИ =================
+# ================= НОВЫЕ ЦЕНЫ ПРОДАЖИ (НЕ ОКУПАЮТ КЕЙС) =================
 PRICES = {
-    'free': {'1': 1, '2': 2, '3': 3, '4': 5, '5': 10},
-    'premium': {'1': 50, '2': 75, '3': 100, '4': 150, '5': 200},
-    'legendary': {'1': 500, '2': 750, '3': 1000, '4': 1500, '5': 2000},
-    'halloween': {'1': 800, '2': 1200, '3': 1600, '4': 2000, '5': 3000},
-    'newyear': {'1': 1500, '2': 2000, '3': 2500, '4': 3000, '5': 5000},
-    'mythical': {'1': 3000, '2': 4000, '3': 5000, '4': 7000, '5': 10000},
-    'elite': {'1': 10000, '2': 15000, '3': 20000, '4': 30000, '5': 50000},
-    'cosmic': {'1': 5000, '2': 15000, '3': 30000, '4': 60000, '5': 200000},
-    'pepe': {'1': 30000, '2': 50000, '3': 60000, '4': 80000, '5': 1000000}
+    'free': {'1': 1, '2': 2, '3': 3, '4': 5, '5': 8},
+    'premium': {'1': 30, '2': 45, '3': 60, '4': 80, '5': 95},  # Кейс 100
+    'legendary': {'1': 150, '2': 200, '3': 280, '4': 350, '5': 450},  # Кейс 500
+    'halloween': {'1': 600, '2': 800, '3': 1100, '4': 1400, '5': 2000},  # Кейс 2500
+    'newyear': {'1': 1200, '2': 1600, '3': 2200, '4': 2800, '5': 4000},  # Кейс 5000
+    'mythical': {'1': 250, '2': 350, '3': 500, '4': 700, '5': 900},  # Кейс 1000
+    'elite': {'1': 1200, '2': 1800, '3': 2500, '4': 3500, '5': 4500},  # Кейс 5000
+    'cosmic': {'1': 3000, '2': 5000, '3': 8000, '4': 10000, '5': 18000},  # Кейс 10000
+    'pepe': {'1': 25000, '2': 40000, '3': 50000, '4': 65000, '5': 90000}  # Кейс 100000
 }
 
 # ================= КОНФИГУРАЦИЯ КЕЙСОВ =================
@@ -191,7 +191,6 @@ def init_db():
         with db.get_connection() as conn:
             cur = conn.cursor()
             
-            # Таблица пользователей
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
@@ -201,7 +200,6 @@ def init_db():
                 )
             ''')
             
-            # Таблица промокодов
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS promocodes (
                     code TEXT PRIMARY KEY,
@@ -213,7 +211,6 @@ def init_db():
                 )
             ''')
             
-            # Таблица кейсов
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS cases (
                     case_id TEXT PRIMARY KEY,
@@ -225,7 +222,6 @@ def init_db():
                 )
             ''')
             
-            # Все кейсы
             all_cases = [
                 ('free', '🗑️ Кейс Бомжа', 1, 0, 0, '🗑️'),
                 ('premium', '💎 Премиум Кейс', 1, 100, 0, '💎'),
@@ -259,7 +255,6 @@ def init_db():
 
 # ================= ФУНКЦИИ РАБОТЫ С ПОЛЬЗОВАТЕЛЯМИ =================
 def get_user(user_id: int) -> Dict[str, Any]:
-    """Получение данных пользователя с обработкой ошибок"""
     try:
         with db.get_connection() as conn:
             cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -267,10 +262,9 @@ def get_user(user_id: int) -> Dict[str, Any]:
             result = cur.fetchone()
             
             if result:
-                inventory = json.loads(result['inventory']) if result['inventory'] else {}
                 return {
                     'stars': result['stars'],
-                    'inventory': inventory,
+                    'inventory': json.loads(result['inventory']),
                     'username': result['username'] or ''
                 }
             else:
@@ -285,7 +279,6 @@ def get_user(user_id: int) -> Dict[str, Any]:
         return {'stars': 15, 'inventory': {}, 'username': ''}
 
 def update_user(user_id: int, stars: int, inventory: Dict[str, Any]) -> bool:
-    """Обновление данных пользователя с транзакцией"""
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -413,9 +406,7 @@ def toggle_case(case_id: str) -> Optional[int]:
         return None
 
 def get_item_price(item_id: str, case_type: Optional[str] = None) -> int:
-    """Получение цены предмета с обработкой всех форматов"""
     try:
-        # Если item_id содержит подчеркивание (например premium_5)
         if '_' in item_id:
             parts = item_id.split('_')
             if len(parts) == 2:
@@ -425,12 +416,10 @@ def get_item_price(item_id: str, case_type: Optional[str] = None) -> int:
                 if case_type in PRICES and item_num in PRICES[case_type]:
                     return PRICES[case_type][item_num]
         
-        # Если передан тип
         if case_type and case_type in PRICES:
             if item_id in PRICES[case_type]:
                 return PRICES[case_type][item_id]
         
-        # Пробуем найти по всем типам
         for ct, prices in PRICES.items():
             if item_id in prices:
                 return prices[item_id]
@@ -443,7 +432,6 @@ def get_item_price(item_id: str, case_type: Optional[str] = None) -> int:
         return 1
 
 def open_case(case_type: str) -> Tuple[str, str]:
-    """Открытие кейса с проверкой шансов"""
     try:
         if case_type == 'pepe':
             if random.randint(1, 100) <= PEPE_LEGENDARY_CHANCE:
@@ -468,9 +456,15 @@ def open_case(case_type: str) -> Tuple[str, str]:
         logger.error(f"❌ Ошибка в open_case: {e}")
         return '1', 'Ошибка'
 
+def open_multiple_cases(case_type: str, count: int) -> List[Tuple[str, str]]:
+    results = []
+    for _ in range(count):
+        item_id, item_name = open_case(case_type)
+        results.append((item_id, item_name))
+    return results
+
 # ================= ФУНКЦИИ РАБОТЫ С ПРОМОКОДАМИ =================
 def validate_item_id(item_id: str) -> Optional[str]:
-    """Проверка существования предмета в формате: case_type_number"""
     if not item_id or '_' not in item_id:
         return None
     
@@ -489,7 +483,6 @@ def validate_item_id(item_id: str) -> Optional[str]:
     return case_type
 
 def parse_item_id(item_id: str) -> Tuple[Optional[str], Optional[str]]:
-    """Парсит строку вида premium_5 и возвращает (case_type, item_num)"""
     if not item_id or '_' not in item_id:
         return None, None
     
@@ -638,7 +631,6 @@ def use_promocode(code: str, user_id: int) -> Tuple[Optional[str], str]:
 
 # ================= ФУНКЦИЯ ПРОДАЖИ =================
 def sell_item(user_id: int, item_id: str) -> Tuple[bool, str]:
-    """Продажа предмета с транзакцией"""
     try:
         user_data = get_user(user_id)
         inventory = user_data['inventory']
@@ -652,12 +644,10 @@ def sell_item(user_id: int, item_id: str) -> Tuple[bool, str]:
         if price <= 0:
             return False, "❌ Этот предмет нельзя продать"
         
-        # Уменьшаем количество
         item['count'] -= 1
         if item['count'] <= 0:
             del inventory[item_id]
         
-        # Добавляем звезды
         user_data['stars'] += price
         update_user(user_id, user_data['stars'], inventory)
         
@@ -667,11 +657,30 @@ def sell_item(user_id: int, item_id: str) -> Tuple[bool, str]:
         return False, f"❌ Ошибка: {str(e)}"
 
 # ================= АНИМАЦИЯ =================
-def animate_case(call: types.CallbackQuery, case_type: str):
+def animate_case(call: types.CallbackQuery, case_type: str, count: int = 1):
     try:
         message = call.message
         case_name, emoji = get_case_name(case_type)
         
+        # Получаем данные пользователя перед открытием
+        user_data = get_user(message.chat.id)
+        total_price = get_case_price(case_type) * count
+        
+        # Проверяем достаточно ли звезд
+        if total_price > 0 and user_data['stars'] < total_price:
+            bot.send_message(
+                message.chat.id,
+                f"❌ Недостаточно звезд! Нужно: {total_price:,} ⭐".replace(',', ' ')
+            )
+            show_main_menu(message.chat.id)
+            return
+        
+        # Списываем звезды
+        if total_price > 0:
+            user_data['stars'] -= total_price
+            update_user(message.chat.id, user_data['stars'], user_data['inventory'])
+        
+        # Анимация
         animation_frames = [
             ['🎰', '🎲', '✨', '⭐'],
             ['✨', '🎰', '🎲', '💫'],
@@ -683,64 +692,74 @@ def animate_case(call: types.CallbackQuery, case_type: str):
         
         anim_msg = bot.send_message(
             message.chat.id,
-            f"{emoji} **Открываем {case_name}...**\n\n"
+            f"{emoji} **Открываем {count}x {case_name}...**\n\n"
             f"🌀 Подготовка..."
         )
         
         for frame in animation_frames:
-            time.sleep(0.25)
+            time.sleep(0.2)
             try:
                 bot.edit_message_text(
                     chat_id=message.chat.id,
                     message_id=anim_msg.message_id,
-                    text=f"{emoji} **Открываем {case_name}...**\n\n"
+                    text=f"{emoji} **Открываем {count}x {case_name}...**\n\n"
                          f"{' '.join(frame)}",
                     parse_mode='Markdown'
                 )
             except:
                 pass
         
-        # Открываем кейс
-        item_id, item_name = open_case(case_type)
+        # Открываем кейсы
+        results = open_multiple_cases(case_type, count)
         
-        # Получаем данные пользователя
-        user_data = get_user(message.chat.id)
+        # Обновляем инвентарь
         inventory = user_data['inventory']
+        total_value = 0
+        items_text = ""
         
-        # Сохраняем предмет с полным ID
-        full_item_id = f"{case_type}_{item_id}"
-        if full_item_id in inventory:
-            inventory[full_item_id]['count'] += 1
-            inventory[full_item_id]['type'] = case_type
-        else:
-            inventory[full_item_id] = {
-                'name': item_name,
-                'count': 1,
-                'type': case_type
-            }
+        for item_id, item_name in results:
+            full_item_id = f"{case_type}_{item_id}"
+            price = get_item_price(item_id, case_type)
+            total_value += price
+            
+            if full_item_id in inventory:
+                inventory[full_item_id]['count'] += 1
+            else:
+                inventory[full_item_id] = {
+                    'name': item_name,
+                    'count': 1,
+                    'type': case_type
+                }
+            
+            # Определяем редкость для отображения
+            if price >= 1000000:
+                rarity = "💎💎💎"
+            elif price >= 50000:
+                rarity = "💎✨"
+            elif price >= 10000:
+                rarity = "✨⭐"
+            elif price >= 1000:
+                rarity = "⭐"
+            else:
+                rarity = "📦"
+            
+            items_text += f"{rarity} {item_name} (+{price:,}⭐)\n"
         
         # Сохраняем изменения
         update_user(message.chat.id, user_data['stars'], inventory)
         
-        # Получаем цену
-        price = get_item_price(item_id, case_type)
+        # Формируем финальное сообщение
+        final_text = f"🎉 **Результаты {count}x {case_name}:**\n\n"
+        final_text += items_text
+        final_text += f"\n💰 **Общая стоимость:** {total_value:,} ⭐"
+        final_text += f"\n💸 **Потрачено:** {total_price:,} ⭐"
         
-        # Определяем редкость
-        if price >= 1000000:
-            rarity = "🔥🔥🔥 **ЛЕГЕНДАРНО!** 🔥🔥🔥"
-        elif price >= 50000:
-            rarity = "✨✨ **ЭПИЧЕСКИЙ ВЫПАД!** ✨✨"
-        elif price >= 10000:
-            rarity = "🌟 **РЕДКИЙ ПРЕДМЕТ!** 🌟"
-        elif price >= 1000:
-            rarity = "⭐ **НЕПЛОХОЙ ПРЕДМЕТ!** ⭐"
+        if total_value > total_price:
+            final_text += f"\n📈 **Прибыль:** +{total_value - total_price:,} ⭐ 🎉"
         else:
-            rarity = "📦 Обычный предмет"
+            final_text += f"\n📉 **Убыток:** -{total_price - total_value:,} ⭐ 😅"
         
-        final_text = f"{rarity}\n\n"
-        final_text += f"🎉 Вам выпало: **{item_name}**\n"
-        final_text += f"💰 Цена продажи: **{price:,}** ⭐\n"
-        final_text += f"\n💡 Предмет добавлен в инвентарь!"
+        final_text += f"\n\n💡 Предметы добавлены в инвентарь!"
         
         try:
             bot.edit_message_text(
@@ -804,6 +823,25 @@ def main_menu_keyboard(user_id: int) -> types.InlineKeyboardMarkup:
     
     return keyboard
 
+def case_amount_keyboard(case_id: str) -> types.InlineKeyboardMarkup:
+    """Клавиатура выбора количества кейсов"""
+    keyboard = types.InlineKeyboardMarkup(row_width=4)
+    
+    amounts = [
+        ('1️⃣ 1', f"case_amount_{case_id}_1"),
+        ('3️⃣ 3', f"case_amount_{case_id}_3"),
+        ('5️⃣ 5', f"case_amount_{case_id}_5"),
+        ('🔟 10', f"case_amount_{case_id}_10")
+    ]
+    
+    for label, callback in amounts:
+        btn = types.InlineKeyboardButton(label, callback_data=callback)
+        keyboard.add(btn)
+    
+    keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back"))
+    
+    return keyboard
+
 def show_main_menu(chat_id: int):
     try:
         user = get_user(chat_id)
@@ -835,7 +873,6 @@ def sell_keyboard(user_id: int) -> types.InlineKeyboardMarkup:
             keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back"))
             return keyboard
         
-        # Сортируем предметы по цене
         sorted_items = sorted(
             inventory.items(),
             key=lambda x: get_item_price(x[0], x[1].get('type', '')),
@@ -933,6 +970,9 @@ def start(message: types.Message):
 🎄 **Новогодний Кейс** - 5 000 ⭐
 🐸 **PePe праздник🔥** - 100 000 ⭐
 
+💡 **Новое:** Теперь можно открывать до 10 кейсов за раз!
+Выберите кейс, затем количество!
+
 🎯 **Цель:** Собрать легендарного Пепе и стать самым богатым!
 """
         
@@ -958,42 +998,66 @@ def admin_panel(message: types.Message):
         logger.error(f"❌ Ошибка в admin_panel: {e}")
 
 # ================= ОБРАБОТЧИКИ CALLBACK =================
-@bot.callback_query_handler(func=lambda call: call.data.startswith("case_"))
-def handle_case(call: types.CallbackQuery):
+@bot.callback_query_handler(func=lambda call: call.data.startswith("case_") and not call.data.startswith("case_amount_"))
+def handle_case_selection(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
-        user_data = get_user(user_id)
         case_id = call.data.replace("case_", "")
         
         if not is_case_enabled(case_id):
             bot.answer_callback_query(call.id, "❌ Этот кейс временно отключен!", show_alert=True)
             return
         
-        price = get_case_price(case_id)
-        
-        if price > 0:
-            if user_data['stars'] >= price:
-                user_data['stars'] -= price
-                update_user(user_id, user_data['stars'], user_data['inventory'])
-                try:
-                    bot.delete_message(user_id, call.message.message_id)
-                except:
-                    pass
-                threading.Thread(target=animate_case, args=(call, case_id), daemon=True).start()
-            else:
-                bot.answer_callback_query(
-                    call.id, 
-                    f"❌ Недостаточно звезд! Нужно: {price:,} ⭐".replace(',', ' '), 
-                    show_alert=True
-                )
-        else:
-            try:
-                bot.delete_message(user_id, call.message.message_id)
-            except:
-                pass
-            threading.Thread(target=animate_case, args=(call, case_id), daemon=True).start()
+        # Показываем выбор количества
+        try:
+            bot.edit_message_text(
+                chat_id=user_id,
+                message_id=call.message.message_id,
+                text=f"🎯 **Выберите количество {get_case_name(case_id)[0]}:**",
+                parse_mode='Markdown',
+                reply_markup=case_amount_keyboard(case_id)
+            )
+        except:
+            bot.send_message(
+                user_id,
+                f"🎯 **Выберите количество {get_case_name(case_id)[0]}:**",
+                parse_mode='Markdown',
+                reply_markup=case_amount_keyboard(case_id)
+            )
     except Exception as e:
-        logger.error(f"❌ Ошибка в handle_case: {e}")
+        logger.error(f"❌ Ошибка в handle_case_selection: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("case_amount_"))
+def handle_case_amount(call: types.CallbackQuery):
+    try:
+        user_id = call.message.chat.id
+        parts = call.data.split("_")
+        case_id = parts[2]
+        count = int(parts[3])
+        
+        # Проверяем достаточно ли звезд
+        price = get_case_price(case_id)
+        total_price = price * count
+        
+        user_data = get_user(user_id)
+        
+        if total_price > 0 and user_data['stars'] < total_price:
+            bot.answer_callback_query(
+                call.id, 
+                f"❌ Недостаточно звезд! Нужно: {total_price:,} ⭐".replace(',', ' '), 
+                show_alert=True
+            )
+            return
+        
+        # Закрываем меню и открываем кейсы
+        try:
+            bot.delete_message(user_id, call.message.message_id)
+        except:
+            pass
+        
+        threading.Thread(target=animate_case, args=(call, case_id, count), daemon=True).start()
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_case_amount: {e}")
         try:
             bot.answer_callback_query(call.id, f"❌ Ошибка: {str(e)}", show_alert=True)
         except:
@@ -1099,11 +1163,9 @@ def handle_sell_menu(call: types.CallbackQuery):
 def handle_sell_item(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
-        # Получаем полный ID предмета (например premium_5)
         item_id = call.data.replace("sell_", "")
         user_data = get_user(user_id)
         
-        # Проверяем наличие предмета в инвентаре
         if item_id not in user_data['inventory']:
             bot.answer_callback_query(call.id, "❌ Предмет не найден в инвентаре!", show_alert=True)
             return
@@ -1111,7 +1173,6 @@ def handle_sell_item(call: types.CallbackQuery):
         item = user_data['inventory'][item_id]
         price = get_item_price(item_id, item.get('type', ''))
         
-        # Если предмет очень дорогой - запрашиваем подтверждение
         if price >= 1000000:
             confirm = types.InlineKeyboardMarkup()
             confirm.add(
@@ -1135,12 +1196,10 @@ def handle_sell_item(call: types.CallbackQuery):
                 )
             return
         
-        # Обычная продажа
         success, msg = sell_item(user_id, item_id)
         bot.answer_callback_query(call.id, msg, show_alert=False)
         
         if success:
-            # Обновляем меню продажи
             keyboard = sell_keyboard(user_id)
             try:
                 bot.edit_message_text(
