@@ -8,23 +8,35 @@ import json
 import os
 import sys
 from psycopg2.extras import RealDictCursor
-from urllib.parse import urlparse
+from psycopg2 import pool
+from contextlib import contextmanager
+import logging
+
+# ================= НАСТРОЙКА ЛОГИРОВАНИЯ =================
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # ================= КОНФИГ =================
 TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 123456789))
 
 if not TOKEN:
-    print("❌ Ошибка: BOT_TOKEN не найден в переменных окружения!")
+    logger.error("❌ BOT_TOKEN не найден!")
     sys.exit(1)
 
-print("🤖 Бот запускается...")
-print(f"👑 Админ ID: {ADMIN_ID}")
+logger.info(f"🤖 Бот запускается... Админ ID: {ADMIN_ID}")
 
 bot = telebot.TeleBot(TOKEN)
 
-# ================= ПРЕДМЕТЫ =================
+# ================= ПРЕДМЕТЫ И КЕЙСЫ =================
 ITEMS = {
+    'free': {
+        '1': '🗑 Мусорный пакет',
+        '2': '🍌 Банан',
+        '3': '🧦 Грязный носок',
+        '4': '📦 Пустая коробка',
+        '5': '🪙 Медная монета'
+    },
     'premium': {
         '1': '🌟 Звездный подарок',
         '2': '💎 Алмазный стикер',
@@ -32,12 +44,12 @@ ITEMS = {
         '4': '🚀 Ракетный апгрейд',
         '5': '🎁 Мега-подарок'
     },
-    'free': {
-        '1': '🗑 Мусорный пакет',
-        '2': '🍌 Банан',
-        '3': '🧦 Грязный носок',
-        '4': '📦 Пустая коробка',
-        '5': '🪙 Медная монета'
+    'legendary': {
+        '1': '⚡ Молния Тора',
+        '2': '🔥 Огненный меч',
+        '3': '🌊 Трезубец Посейдона',
+        '4': '🛡 Щит Ахиллеса',
+        '5': '👑 Корона Бессмертия'
     },
     'halloween': {
         '1': '🎃 Тыква-светильник',
@@ -53,12 +65,26 @@ ITEMS = {
         '4': '🦌 Олень-проводник',
         '5': '⭐ Новогодняя звезда'
     },
-    'legendary': {
-        '1': '⚡ Молния Тора',
-        '2': '🔥 Огненный меч',
-        '3': '🌊 Трезубец Посейдона',
-        '4': '🛡 Щит Ахиллеса',
-        '5': '👑 Корона Бессмертия'
+    'mythical': {
+        '1': '🌙 Лунный камень',
+        '2': '☀️ Солнечный амулет',
+        '3': '⭐ Звездная пыль',
+        '4': '🌌 Галактический кристалл',
+        '5': '💜 Сердце Вселенной'
+    },
+    'elite': {
+        '1': '❤️ Рубин вечности',
+        '2': '💎 Алмаз власти',
+        '3': '👑 Корона императора',
+        '4': '⚜️ Скипетр короля',
+        '5': '🏆 Трофей чемпиона'
+    },
+    'cosmic': {
+        '1': '🌌 Туманность Андромеды',
+        '2': '🪐 Кольца Сатурна',
+        '3': '🌠 Падающая звезда',
+        '4': '🌍 Планета сокровищ',
+        '5': '☄️ Комета удачи'
     },
     'pepe': {
         '1': '🐸 Пепе Обычный',
@@ -71,242 +97,289 @@ ITEMS = {
 
 # ================= ШАНСЫ ВЫПАДЕНИЯ =================
 CHANCES = {
-    'premium': {'1': 20, '2': 15, '3': 10, '4': 5, '5': 50},
-    'free': {'1': 30, '2': 25, '3': 20, '4': 15, '5': 10},
-    'halloween': {'1': 25, '2': 20, '3': 20, '4': 15, '5': 20},
-    'newyear': {'1': 30, '2': 25, '3': 15, '4': 15, '5': 15},
-    'legendary': {'1': 25, '2': 20, '3': 20, '4': 15, '5': 20},
+    'free': {'1': 35, '2': 25, '3': 20, '4': 15, '5': 5},
+    'premium': {'1': 30, '2': 25, '3': 20, '4': 15, '5': 10},
+    'legendary': {'1': 25, '2': 20, '3': 20, '4': 20, '5': 15},
+    'halloween': {'1': 25, '2': 20, '3': 20, '4': 20, '5': 15},
+    'newyear': {'1': 20, '2': 20, '3': 20, '4': 20, '5': 20},
+    'mythical': {'1': 20, '2': 20, '3': 20, '4': 20, '5': 20},
+    'elite': {'1': 15, '2': 20, '3': 20, '4': 25, '5': 20},
+    'cosmic': {'1': 10, '2': 15, '3': 20, '4': 25, '5': 30},
     'pepe': {'1': 30, '2': 25, '3': 20, '4': 15, '5': 10}
 }
 
-PEPE_LEGENDARY_CHANCE = 1
+PEPE_LEGENDARY_CHANCE = 1  # 1% шанс на легендарного пепе
 
 # ================= ЦЕНЫ ПРОДАЖИ =================
 PRICES = {
-    'premium': {'1': 50, '2': 75, '3': 100, '4': 150, '5': 200},
     'free': {'1': 1, '2': 2, '3': 3, '4': 5, '5': 10},
-    'halloween': {'1': 60, '2': 80, '3': 100, '4': 150, '5': 200},
-    'newyear': {'1': 50, '2': 70, '3': 90, '4': 130, '5': 180},
+    'premium': {'1': 50, '2': 75, '3': 100, '4': 150, '5': 200},
     'legendary': {'1': 500, '2': 750, '3': 1000, '4': 1500, '5': 2000},
-    'pepe': {
-        '1': 30000,
-        '2': 50000,
-        '3': 60000,
-        '4': 80000,
-        '5': 1000000
-    }
+    'halloween': {'1': 800, '2': 1200, '3': 1600, '4': 2000, '5': 3000},
+    'newyear': {'1': 1500, '2': 2000, '3': 2500, '4': 3000, '5': 5000},
+    'mythical': {'1': 3000, '2': 4000, '3': 5000, '4': 7000, '5': 10000},
+    'elite': {'1': 10000, '2': 15000, '3': 20000, '4': 30000, '5': 50000},
+    'cosmic': {'1': 30000, '2': 50000, '3': 80000, '4': 120000, '5': 200000},
+    'pepe': {'1': 30000, '2': 50000, '3': 60000, '4': 80000, '5': 1000000}
+}
+
+# ================= КОНФИГУРАЦИЯ КЕЙСОВ =================
+CASE_CONFIG = {
+    'free': {'price': 0, 'temporary': False, 'emoji': '🗑️'},
+    'premium': {'price': 100, 'temporary': False, 'emoji': '💎'},
+    'legendary': {'price': 500, 'temporary': False, 'emoji': '⚡'},
+    'halloween': {'price': 2500, 'temporary': True, 'emoji': '🎃'},
+    'newyear': {'price': 5000, 'temporary': True, 'emoji': '🎄'},
+    'mythical': {'price': 1000, 'temporary': False, 'emoji': '💜'},
+    'elite': {'price': 5000, 'temporary': False, 'emoji': '❤️'},
+    'cosmic': {'price': 10000, 'temporary': False, 'emoji': '🌌'},
+    'pepe': {'price': 100000, 'temporary': False, 'emoji': '🐸'}
 }
 
 # ================= ПОДКЛЮЧЕНИЕ К БАЗЕ =================
-def get_db_connection():
-    """Подключение к PostgreSQL на Railway через DATABASE_URL"""
-    database_url = os.environ.get('DATABASE_URL')
-    
-    if database_url:
-        try:
-            conn = psycopg2.connect(database_url, sslmode='require')
-            return conn
-        except Exception as e:
-            print(f"❌ Ошибка подключения к PostgreSQL: {e}")
-            raise
-    else:
-        print("❌ DATABASE_URL не найден!")
-        raise Exception("DATABASE_URL not found")
+class Database:
+    def __init__(self):
+        self.pool = None
+        self.init_pool()
 
-def init_db():
-    """Инициализация таблиц в базе данных"""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Таблица пользователей
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
-                stars INTEGER DEFAULT 15,
-                inventory TEXT DEFAULT '{}',
-                username TEXT DEFAULT ''
-            )
-        ''')
-        
-        # Таблица промокодов
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS promocodes (
-                code TEXT PRIMARY KEY,
-                type TEXT,
-                item_id TEXT,
-                stars INTEGER DEFAULT 0,
-                uses INTEGER DEFAULT 1,
-                used_by TEXT DEFAULT '[]'
-            )
-        ''')
-        
-        # Таблица кейсов
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS cases (
-                case_id TEXT PRIMARY KEY,
-                name TEXT,
-                enabled INTEGER DEFAULT 1,
-                price INTEGER DEFAULT 0,
-                is_temporary INTEGER DEFAULT 0,
-                emoji TEXT DEFAULT '🎁'
-            )
-        ''')
-        
-        # Проверяем есть ли кейсы
-        cur.execute('SELECT COUNT(*) FROM cases')
-        count = cur.fetchone()[0]
-        
-        if count == 0:
-            # Добавляем кейсы только если их нет
-            default_cases = [
-                ('free', '🗑️ Кейс Бомжа', 1, 0, 0, '🗑️'),
-                ('premium', '💎 Премиум Кейс', 1, 100, 0, '💎'),
-                ('halloween', '🎃 Хеллоуинский Кейс', 1, 150, 1, '🎃'),
-                ('newyear', '🎄 Новогодний Кейс', 1, 150, 1, '🎄'),
-                ('legendary', '⚡ Легендарный Кейс', 1, 500, 0, '⚡'),
-                ('pepe', '🐸 PePe праздник🔥', 1, 100000, 0, '🐸')
-            ]
-            
-            for case in default_cases:
-                cur.execute('''
-                    INSERT INTO cases (case_id, name, enabled, price, is_temporary, emoji) 
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                ''', case)
-            print("✅ Добавлены кейсы по умолчанию")
-        
-        conn.commit()
-        cur.close()
-        conn.close()
-        print("✅ База данных инициализирована")
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка инициализации базы данных: {e}")
-        return False
-
-def get_user(user_id):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute('SELECT stars, inventory, username FROM users WHERE user_id = %s', (user_id,))
-        result = cur.fetchone()
-        
-        if result:
-            cur.close()
-            conn.close()
-            return {
-                'stars': result['stars'], 
-                'inventory': json.loads(result['inventory']), 
-                'username': result['username'] or ''
-            }
+    def init_pool(self):
+        database_url = os.environ.get('DATABASE_URL')
+        if database_url:
+            try:
+                self.pool = psycopg2.pool.SimpleConnectionPool(1, 20, database_url, sslmode='require')
+                logger.info("✅ Пул подключений PostgreSQL создан")
+            except Exception as e:
+                logger.error(f"❌ Ошибка создания пула: {e}")
+                raise
         else:
-            cur.execute('INSERT INTO users (user_id, stars, inventory, username) VALUES (%s, %s, %s, %s)', 
-                        (user_id, 15, json.dumps({}), ''))
+            logger.error("❌ DATABASE_URL не найден!")
+            raise Exception("DATABASE_URL not found")
+
+    @contextmanager
+    def get_connection(self):
+        conn = None
+        try:
+            conn = self.pool.getconn()
+            yield conn
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"❌ Ошибка базы данных: {e}")
+            raise
+        finally:
+            if conn:
+                self.pool.putconn(conn)
+
+db = Database()
+
+# ================= ИНИЦИАЛИЗАЦИЯ БАЗЫ =================
+def init_db():
+    try:
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            
+            # Таблица пользователей
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    stars INTEGER DEFAULT 15,
+                    inventory TEXT DEFAULT '{}',
+                    username TEXT DEFAULT ''
+                )
+            ''')
+            
+            # Таблица промокодов
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS promocodes (
+                    code TEXT PRIMARY KEY,
+                    type TEXT,
+                    item_id TEXT,
+                    stars INTEGER DEFAULT 0,
+                    uses INTEGER DEFAULT 1,
+                    used_by TEXT DEFAULT '[]'
+                )
+            ''')
+            
+            # Таблица кейсов
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS cases (
+                    case_id TEXT PRIMARY KEY,
+                    name TEXT,
+                    enabled INTEGER DEFAULT 1,
+                    price INTEGER DEFAULT 0,
+                    is_temporary INTEGER DEFAULT 0,
+                    emoji TEXT DEFAULT '🎁'
+                )
+            ''')
+            
+            # Проверяем и добавляем кейсы
+            cur.execute('SELECT COUNT(*) FROM cases')
+            count = cur.fetchone()[0]
+            
+            if count == 0:
+                default_cases = [
+                    ('free', '🗑️ Кейс Бомжа', 1, 0, 0, '🗑️'),
+                    ('premium', '💎 Премиум Кейс', 1, 100, 0, '💎'),
+                    ('legendary', '⚡ Легендарный Кейс', 1, 500, 0, '⚡'),
+                    ('halloween', '🎃 Хеллоуинский Кейс', 1, 2500, 1, '🎃'),
+                    ('newyear', '🎄 Новогодний Кейс', 1, 5000, 1, '🎄'),
+                    ('mythical', '💜 Мифический Кейс', 1, 1000, 0, '💜'),
+                    ('elite', '❤️ Элитный Кейс', 1, 5000, 0, '❤️'),
+                    ('cosmic', '🌌 Космический Кейс', 1, 10000, 0, '🌌'),
+                    ('pepe', '🐸 PePe праздник🔥', 1, 100000, 0, '🐸')
+                ]
+                
+                for case in default_cases:
+                    cur.execute('''
+                        INSERT INTO cases (case_id, name, enabled, price, is_temporary, emoji) 
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    ''', case)
+                logger.info("✅ Добавлены кейсы по умолчанию")
+            
             conn.commit()
             cur.close()
-            conn.close()
-            return {'stars': 15, 'inventory': {}, 'username': ''}
+            logger.info("✅ База данных инициализирована")
+            return True
     except Exception as e:
-        print(f"❌ Ошибка в get_user: {e}")
+        logger.error(f"❌ Ошибка инициализации базы: {e}")
+        return False
+
+# ================= ФУНКЦИИ РАБОТЫ С ПОЛЬЗОВАТЕЛЯМИ =================
+def get_user(user_id):
+    try:
+        with db.get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute('SELECT stars, inventory, username FROM users WHERE user_id = %s', (user_id,))
+            result = cur.fetchone()
+            
+            if result:
+                return {
+                    'stars': result['stars'],
+                    'inventory': json.loads(result['inventory']),
+                    'username': result['username'] or ''
+                }
+            else:
+                cur.execute('INSERT INTO users (user_id, stars, inventory, username) VALUES (%s, %s, %s, %s)',
+                            (user_id, 15, json.dumps({}), ''))
+                conn.commit()
+                cur.close()
+                return {'stars': 15, 'inventory': {}, 'username': ''}
+    except Exception as e:
+        logger.error(f"❌ Ошибка в get_user: {e}")
         return {'stars': 15, 'inventory': {}, 'username': ''}
 
 def update_user(user_id, stars, inventory):
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('UPDATE users SET stars = %s, inventory = %s WHERE user_id = %s', 
-                    (stars, json.dumps(inventory), user_id))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return True
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('UPDATE users SET stars = %s, inventory = %s WHERE user_id = %s',
+                        (stars, json.dumps(inventory), user_id))
+            conn.commit()
+            cur.close()
+            return True
     except Exception as e:
-        print(f"❌ Ошибка в update_user: {e}")
+        logger.error(f"❌ Ошибка в update_user: {e}")
         return False
 
 def update_username(user_id, username):
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('UPDATE users SET username = %s WHERE user_id = %s', (username, user_id))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return True
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('UPDATE users SET username = %s WHERE user_id = %s', (username, user_id))
+            conn.commit()
+            cur.close()
+            return True
     except Exception as e:
-        print(f"❌ Ошибка в update_username: {e}")
+        logger.error(f"❌ Ошибка в update_username: {e}")
         return False
 
 def get_all_users():
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT user_id FROM users')
-        users = cur.fetchall()
-        cur.close()
-        conn.close()
-        return [user[0] for user in users]
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT user_id FROM users')
+            users = cur.fetchall()
+            cur.close()
+            return [user[0] for user in users]
     except Exception as e:
-        print(f"❌ Ошибка в get_all_users: {e}")
+        logger.error(f"❌ Ошибка в get_all_users: {e}")
         return []
 
 def get_all_users_data():
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT user_id, stars, username FROM users ORDER BY stars DESC')
-        users = cur.fetchall()
-        cur.close()
-        conn.close()
-        return users
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT user_id, stars, username FROM users ORDER BY stars DESC')
+            users = cur.fetchall()
+            cur.close()
+            return users
     except Exception as e:
-        print(f"❌ Ошибка в get_all_users_data: {e}")
+        logger.error(f"❌ Ошибка в get_all_users_data: {e}")
         return []
 
+# ================= ФУНКЦИИ РАБОТЫ С КЕЙСАМИ =================
 def is_case_enabled(case_id):
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT enabled FROM cases WHERE case_id = %s', (case_id,))
-        result = cur.fetchone()
-        cur.close()
-        conn.close()
-        return result and result[0] == 1
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT enabled FROM cases WHERE case_id = %s', (case_id,))
+            result = cur.fetchone()
+            cur.close()
+            return result and result[0] == 1
     except Exception as e:
-        print(f"❌ Ошибка в is_case_enabled: {e}")
+        logger.error(f"❌ Ошибка в is_case_enabled: {e}")
         return False
 
 def get_case_price(case_id):
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT price FROM cases WHERE case_id = %s', (case_id,))
-        result = cur.fetchone()
-        cur.close()
-        conn.close()
-        return result[0] if result else 0
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT price FROM cases WHERE case_id = %s', (case_id,))
+            result = cur.fetchone()
+            cur.close()
+            return result[0] if result else 0
     except Exception as e:
-        print(f"❌ Ошибка в get_case_price: {e}")
+        logger.error(f"❌ Ошибка в get_case_price: {e}")
         return 0
 
 def get_case_name(case_id):
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT name, emoji FROM cases WHERE case_id = %s', (case_id,))
-        result = cur.fetchone()
-        cur.close()
-        conn.close()
-        return (result[0], result[1]) if result else (case_id, '🎁')
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT name, emoji FROM cases WHERE case_id = %s', (case_id,))
+            result = cur.fetchone()
+            cur.close()
+            return (result[0], result[1]) if result else (case_id, '🎁')
     except Exception as e:
-        print(f"❌ Ошибка в get_case_name: {e}")
+        logger.error(f"❌ Ошибка в get_case_name: {e}")
         return (case_id, '🎁')
+
+def toggle_case(case_id):
+    try:
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT enabled FROM cases WHERE case_id = %s', (case_id,))
+            result = cur.fetchone()
+            if result:
+                new_status = 0 if result[0] == 1 else 1
+                cur.execute('UPDATE cases SET enabled = %s WHERE case_id = %s', (new_status, case_id))
+                conn.commit()
+                cur.close()
+                return new_status
+            cur.close()
+            return None
+    except Exception as e:
+        logger.error(f"❌ Ошибка в toggle_case: {e}")
+        return None
 
 def get_item_price(item_id, case_type):
     return PRICES.get(case_type, {}).get(item_id, 1)
 
 def open_case(case_type):
+    """Открытие кейса с проверкой шансов"""
     if case_type == 'pepe':
+        # 1% шанс на легендарного пепе
         if random.randint(1, 100) <= PEPE_LEGENDARY_CHANCE:
             return '5', ITEMS['pepe']['5']
         
@@ -326,222 +399,418 @@ def open_case(case_type):
     
     return '1', 'Ошибка'
 
+# ================= ФУНКЦИИ РАБОТЫ С ПРОМОКОДАМИ =================
+def validate_item_id(item_id):
+    """Проверка существования предмета"""
+    for case_type, items in ITEMS.items():
+        if item_id in items:
+            return case_type
+    return None
+
 def create_promocode(code, type, item_id=None, stars=0, uses=1):
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('INSERT INTO promocodes (code, type, item_id, stars, uses) VALUES (%s, %s, %s, %s, %s)',
-                    (code, type, item_id, stars, uses))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return True
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            
+            # Проверяем существование предмета если это item
+            if type == 'item' and item_id:
+                if not validate_item_id(item_id):
+                    return False, "❌ Предмет не найден"
+            
+            cur.execute('''
+                INSERT INTO promocodes (code, type, item_id, stars, uses) 
+                VALUES (%s, %s, %s, %s, %s)
+            ''', (code, type, item_id, stars, uses))
+            conn.commit()
+            cur.close()
+            return True, "✅ Промокод создан"
+    except psycopg2.IntegrityError:
+        return False, "❌ Промокод с таким названием уже существует"
     except Exception as e:
-        print(f"❌ Ошибка в create_promocode: {e}")
-        return False
+        logger.error(f"❌ Ошибка в create_promocode: {e}")
+        return False, f"❌ Ошибка: {str(e)}"
 
 def delete_promocode(code):
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return True
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
+            conn.commit()
+            cur.close()
+            return True
     except Exception as e:
-        print(f"❌ Ошибка в delete_promocode: {e}")
+        logger.error(f"❌ Ошибка в delete_promocode: {e}")
         return False
 
 def get_all_promocodes():
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT code, type, item_id, stars, uses FROM promocodes')
-        codes = cur.fetchall()
-        cur.close()
-        conn.close()
-        return codes
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT code, type, item_id, stars, uses FROM promocodes')
+            codes = cur.fetchall()
+            cur.close()
+            return codes
     except Exception as e:
-        print(f"❌ Ошибка в get_all_promocodes: {e}")
+        logger.error(f"❌ Ошибка в get_all_promocodes: {e}")
         return []
 
 def use_promocode(code, user_id):
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT type, item_id, stars, uses, used_by FROM promocodes WHERE code = %s', (code,))
-        result = cur.fetchone()
-        if not result:
-            cur.close()
-            conn.close()
-            return None, "❌ Промокод не найден"
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT type, item_id, stars, uses, used_by FROM promocodes WHERE code = %s', (code,))
+            result = cur.fetchone()
+            
+            if not result:
+                return None, "❌ Промокод не найден"
+            
+            type, item_id, stars, uses, used_by_json = result
+            used_by = json.loads(used_by_json) if used_by_json else []
+            user_str = str(user_id)
+            
+            # Проверяем использовал ли уже
+            if user_str in used_by:
+                return None, "❌ Вы уже использовали этот промокод"
+            
+            # Проверяем остаток использований
+            if len(used_by) >= uses:
+                # Автоматически удаляем промокод
+                cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
+                conn.commit()
+                return None, "❌ Промокод уже использован максимальное количество раз"
+            
+            # Получаем данные пользователя
+            user_data = get_user(user_id)
+            
+            if type == 'stars':
+                user_data['stars'] += stars
+                update_user(user_id, user_data['stars'], user_data['inventory'])
+                used_by.append(user_str)
+                
+                # Обновляем использовавших
+                cur.execute('UPDATE promocodes SET used_by = %s WHERE code = %s', (json.dumps(used_by), code))
+                conn.commit()
+                
+                # Проверяем нужно ли удалить
+                if len(used_by) >= uses:
+                    cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
+                    conn.commit()
+                
+                cur.close()
+                return 'stars', f"⭐ Вы получили {stars:,} звезд!"
+            
+            elif type == 'item':
+                # Проверяем существование предмета
+# ================= ФУНКЦИИ РАБОТЫ С ПРОМОКОДАМИ =================
+def validate_item_id(item_id):
+    """
+    Проверка существования предмета.
+    Принимает формат: case_type_item_id (например premium_5)
+    Возвращает (case_type, item_id) или (None, None) если не найден
+    """
+    try:
+        # Разделяем строку по подчеркиванию
+        parts = item_id.split('_')
+        if len(parts) != 2:
+            return None, None
         
-        type, item_id, stars, uses, used_by_json = result
-        used_by = json.loads(used_by_json) if used_by_json else []
+        case_type = parts[0]
+        item_num = parts[1]
         
-        if str(user_id) in used_by:
-            cur.close()
-            conn.close()
-            return None, "❌ Вы уже использовали этот промокод"
+        # Проверяем существует ли такой кейс
+        if case_type not in ITEMS:
+            return None, None
         
-        if uses <= len(used_by):
-            cur.close()
-            conn.close()
-            return None, "❌ Промокод уже использован максимальное количество раз"
+        # Проверяем существует ли такой предмет в кейсе
+        if item_num not in ITEMS[case_type]:
+            return None, None
         
-        user_data = get_user(user_id)
-        if type == 'stars':
-            user_data['stars'] += stars
-            update_user(user_id, user_data['stars'], user_data['inventory'])
-            used_by.append(str(user_id))
-            cur.execute('UPDATE promocodes SET used_by = %s WHERE code = %s', (json.dumps(used_by), code))
-            conn.commit()
-            cur.close()
-            conn.close()
-            return 'stars', f"⭐ Вы получили {stars:,} звезд!"
-        
-        elif type == 'item':
-            inventory = user_data['inventory']
-            if item_id in inventory:
-                inventory[item_id]['count'] += 1
-            else:
-                case_type = None
-                for ct, items in ITEMS.items():
-                    if item_id in items:
-                        case_type = ct
-                        break
-                if case_type:
-                    inventory[item_id] = {'name': ITEMS[case_type][item_id], 'count': 1, 'type': case_type}
-            update_user(user_id, user_data['stars'], inventory)
-            used_by.append(str(user_id))
-            cur.execute('UPDATE promocodes SET used_by = %s WHERE code = %s', (json.dumps(used_by), code))
-            conn.commit()
-            cur.close()
-            conn.close()
-            return 'item', f"🎁 Вы получили предмет: {ITEMS.get(case_type, {}).get(item_id, 'Неизвестно')}"
-        
-        cur.close()
-        conn.close()
-        return None, "❌ Неизвестный тип промокода"
+        return case_type, item_num
     except Exception as e:
-        print(f"❌ Ошибка в use_promocode: {e}")
-        return None, "❌ Ошибка при использовании промокода"
+        logger.error(f"❌ Ошибка в validate_item_id: {e}")
+        return None, None
 
+def create_promocode(code, type, item_id=None, stars=0, uses=1):
+    """
+    Создание промокода
+    type: 'stars' или 'item'
+    item_id: для type='item' - формат case_type_item_id (например premium_5)
+    """
+    try:
+        # Проверяем тип
+        if type not in ['stars', 'item']:
+            return False, "❌ Неверный тип промокода. Используйте 'stars' или 'item'"
+        
+        # Если это промокод на предмет - проверяем существование
+        if type == 'item':
+            if not item_id:
+                return False, "❌ Не указан ID предмета"
+            
+            case_type, item_num = validate_item_id(item_id)
+            if not case_type:
+                return False, f"❌ Предмет '{item_id}' не найден!\nИспользуйте формат: кейс_номер (например premium_5, pepe_1)"
+        
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            
+            cur.execute('''
+                INSERT INTO promocodes (code, type, item_id, stars, uses) 
+                VALUES (%s, %s, %s, %s, %s)
+            ''', (code, type, item_id, stars, uses))
+            conn.commit()
+            cur.close()
+            
+            # Формируем понятное сообщение
+            if type == 'stars':
+                return True, f"✅ Промокод создан!\n🔑 Код: {code}\n⭐ Награда: {stars:,} звезд\n👥 Использований: {uses}"
+            else:
+                # Находим название предмета для красивого вывода
+                case_type, item_num = validate_item_id(item_id)
+                if case_type and item_num:
+                    item_name = ITEMS[case_type][item_num]
+                    return True, f"✅ Промокод создан!\n🔑 Код: {code}\n🎁 Предмет: {item_name}\n👥 Использований: {uses}"
+                else:
+                    return True, f"✅ Промокод создан!\n🔑 Код: {code}\n🎁 Предмет: {item_id}\n👥 Использований: {uses}"
+                
+    except psycopg2.IntegrityError:
+        return False, "❌ Промокод с таким названием уже существует"
+    except Exception as e:
+        logger.error(f"❌ Ошибка в create_promocode: {e}")
+        return False, f"❌ Ошибка: {str(e)}"
+
+def delete_promocode(code):
+    try:
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
+            conn.commit()
+            cur.close()
+            return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка в delete_promocode: {e}")
+        return False
+
+def get_all_promocodes():
+    try:
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT code, type, item_id, stars, uses FROM promocodes')
+            codes = cur.fetchall()
+            cur.close()
+            return codes
+    except Exception as e:
+        logger.error(f"❌ Ошибка в get_all_promocodes: {e}")
+        return []
+
+def use_promocode(code, user_id):
+    """
+    Активация промокода пользователем
+    """
+    try:
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT type, item_id, stars, uses, used_by FROM promocodes WHERE code = %s', (code,))
+            result = cur.fetchone()
+            
+            if not result:
+                return None, "❌ Промокод не найден"
+            
+            promo_type, item_id, stars, uses, used_by_json = result
+            used_by = json.loads(used_by_json) if used_by_json else []
+            user_str = str(user_id)
+            
+            # Проверяем использовал ли уже
+            if user_str in used_by:
+                return None, "❌ Вы уже использовали этот промокод"
+            
+            # Проверяем остаток использований
+            if len(used_by) >= uses:
+                # Автоматически удаляем промокод
+                cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
+                conn.commit()
+                return None, "❌ Промокод уже использован максимальное количество раз"
+            
+            # Получаем данные пользователя
+            user_data = get_user(user_id)
+            
+            if promo_type == 'stars':
+                # Выдача звезд
+                user_data['stars'] += stars
+                update_user(user_id, user_data['stars'], user_data['inventory'])
+                used_by.append(user_str)
+                
+                # Обновляем использовавших
+                cur.execute('UPDATE promocodes SET used_by = %s WHERE code = %s', (json.dumps(used_by), code))
+                conn.commit()
+                
+                # Проверяем нужно ли удалить
+                if len(used_by) >= uses:
+                    cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
+                    conn.commit()
+                
+                cur.close()
+                return 'stars', f"⭐ Вы получили {stars:,} звезд!"
+            
+            elif promo_type == 'item':
+                # Выдача предмета
+                # Проверяем существование предмета
+                case_type, item_num = validate_item_id(item_id)
+                if not case_type:
+                    return None, f"❌ Ошибка: предмет '{item_id}' не найден в системе"
+                
+                item_name = ITEMS[case_type][item_num]
+                inventory = user_data['inventory']
+                
+                # Добавляем предмет в инвентарь
+                if item_id in inventory:
+                    inventory[item_id]['count'] += 1
+                else:
+                    inventory[item_id] = {
+                        'name': item_name,
+                        'count': 1,
+                        'type': case_type
+                    }
+                
+                # Сохраняем инвентарь
+                update_user(user_id, user_data['stars'], inventory)
+                used_by.append(user_str)
+                
+                # Обновляем использовавших
+                cur.execute('UPDATE promocodes SET used_by = %s WHERE code = %s', (json.dumps(used_by), code))
+                conn.commit()
+                
+                # Проверяем нужно ли удалить
+                if len(used_by) >= uses:
+                    cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
+                    conn.commit()
+                
+                cur.close()
+                return 'item', f"🎁 Вы получили предмет: {item_name}"
+            
+            cur.close()
+            return None, "❌ Неизвестный тип промокода"
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка в use_promocode: {e}")
+        return None, f"❌ Ошибка при активации промокода: {str(e)}"
+        
 # ================= АНИМАЦИЯ =================
 def animate_case(call, case_type):
     try:
         message = call.message
         case_name, emoji = get_case_name(case_type)
-
+        
         animation_frames = [
-            ['🎰', '🎲', '✨'],
-            ['✨', '🎰', '🎲'],
-            ['🎲', '✨', '🎰'],
-            ['⭐', '💫', '🌟'],
-            ['💫', '🌟', '⭐'],
-            ['🌟', '⭐', '💫']
+            ['🎰', '🎲', '✨', '⭐'],
+            ['✨', '🎰', '🎲', '💫'],
+            ['🎲', '✨', '🎰', '🌟'],
+            ['⭐', '💫', '🌟', '✨'],
+            ['💫', '🌟', '⭐', '🎰'],
+            ['🌟', '⭐', '💫', '🎲']
         ]
-
+        
         anim_msg = bot.send_message(
             message.chat.id,
             f"{emoji} **Открываем {case_name}...**\n\n"
-            f"🌀 Подготовка...",
-            parse_mode="Markdown"
+            f"🌀 Подготовка..."
         )
-
+        
         for frame in animation_frames:
-            time.sleep(0.3)
+            time.sleep(0.25)
             bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=anim_msg.message_id,
-                text=f"{emoji} **Открываем {case_name}...**\n\n{' '.join(frame)}",
-                parse_mode="Markdown"
+                text=f"{emoji} **Открываем {case_name}...**\n\n"
+                     f"{' '.join(frame)}",
+                parse_mode='Markdown'
             )
-
-        # Выпавший предмет
+        
+        # Открываем кейс
         item_id, item_name = open_case(case_type)
-
-        # Загружаем пользователя
+        
+        # Сохраняем в инвентарь с транзакцией
         user_data = get_user(message.chat.id)
-        inventory = user_data["inventory"]
-
-        # Уникальный ключ предмета
-        inventory_key = f"{case_type}_{item_id}"
-
-        if inventory_key in inventory:
-            inventory[inventory_key]["count"] += 1
+        inventory = user_data['inventory']
+        
+        if item_id in inventory:
+            inventory[item_id]['count'] += 1
         else:
-            inventory[inventory_key] = {
-                "name": item_name,
-                "count": 1,
-                "type": case_type
-            }
-
-        # Сохраняем
-        update_user(message.chat.id, user_data["stars"], inventory)
-
-        # Цена предмета
+            inventory[item_id] = {'name': item_name, 'count': 1, 'type': case_type}
+        
+        update_user(message.chat.id, user_data['stars'], inventory)
+        
         price = get_item_price(item_id, case_type)
-
+        
+        # Определяем редкость
         if price >= 1000000:
             rarity = "🔥🔥🔥 **ЛЕГЕНДАРНО!** 🔥🔥🔥"
         elif price >= 50000:
             rarity = "✨✨ **ЭПИЧЕСКИЙ ВЫПАД!** ✨✨"
         elif price >= 10000:
             rarity = "🌟 **РЕДКИЙ ПРЕДМЕТ!** 🌟"
+        elif price >= 1000:
+            rarity = "⭐ **НЕПЛОХОЙ ПРЕДМЕТ!** ⭐"
         else:
             rarity = "📦 Обычный предмет"
-
-        final_text = (
-            f"{rarity}\n\n"
-            f"🎉 Вам выпало: **{item_name}**\n"
-            f"💰 Цена продажи: **{price:,}** ⭐\n\n"
-            f"💡 Предмет добавлен в инвентарь!"
-        )
-
+        
+        final_text = f"{rarity}\n\n"
+        final_text += f"🎉 Вам выпало: **{item_name}**\n"
+        final_text += f"💰 Цена продажи: **{price:,}** ⭐\n"
+        final_text += f"\n💡 Предмет добавлен в инвентарь!"
+        
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=anim_msg.message_id,
             text=final_text,
-            parse_mode="Markdown"
+            parse_mode='Markdown'
         )
-
+        
         time.sleep(0.5)
         show_main_menu(message.chat.id)
-
     except Exception as e:
-        print(f"❌ Ошибка в animate_case: {e}")
+        logger.error(f"❌ Ошибка в animate_case: {e}")
+        try:
+            bot.send_message(call.message.chat.id, f"❌ Ошибка при открытии кейса: {str(e)}")
+        except:
+            pass
+
 # ================= КЛАВИАТУРЫ =================
 def main_menu_keyboard(user_id):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     
-    cases = [
+    # Список кейсов
+    case_list = [
         ('free', '🗑️ Кейс Бомжа (Бесплатно)'),
         ('premium', '💎 Премиум Кейс (100 ⭐)'),
-        ('legendary', '⚡ Легендарный Кейс (500 ⭐)')
+        ('mythical', '💜 Мифический Кейс (1 000 ⭐)'),
+        ('legendary', '⚡ Легендарный Кейс (500 ⭐)'),
+        ('elite', '❤️ Элитный Кейс (5 000 ⭐)'),
+        ('cosmic', '🌌 Космический Кейс (10 000 ⭐)')
     ]
     
+    # Добавляем временные кейсы
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT case_id, name, price, emoji FROM cases WHERE enabled = 1 AND case_id NOT IN (%s, %s, %s)', 
-                   ('free', 'premium', 'legendary'))
-        temp_cases = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        for case in temp_cases:
-            price_text = "Бесплатно" if case[2] == 0 else f"{case[2]:,} ⭐".replace(',', ' ')
-            emoji = case[3] if len(case) > 3 else '🎁'
-            cases.append((case[0], f"{emoji} {case[1]} ({price_text})"))
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT case_id, name, price, emoji FROM cases WHERE enabled = 1 AND is_temporary = 1')
+            temp_cases = cur.fetchall()
+            cur.close()
+            
+            for case in temp_cases:
+                price_text = f"{case[2]:,} ⭐".replace(',', ' ')
+                case_list.append((case[0], f"{case[3]} {case[1]} ({price_text})"))
     except Exception as e:
-        print(f"❌ Ошибка в main_menu_keyboard: {e}")
+        logger.error(f"❌ Ошибка в main_menu_keyboard: {e}")
     
-    for case_id, label in cases:
-        btn = types.InlineKeyboardButton(label, callback_data=f"case_{case_id}")
-        keyboard.add(btn)
+    # Добавляем PePe кейс отдельно
+    case_list.append(('pepe', '🐸 PePe праздник🔥 (100 000 ⭐)'))
     
+    for case_id, label in case_list:
+        if is_case_enabled(case_id):
+            btn = types.InlineKeyboardButton(label, callback_data=f"case_{case_id}")
+            keyboard.add(btn)
+    
+    # Меню
     btn_profile = types.InlineKeyboardButton("👤 Мой профиль", callback_data="profile")
     btn_sell = types.InlineKeyboardButton("💰 Продать предметы", callback_data="sell")
     btn_leaderboard = types.InlineKeyboardButton("🏆 Лидеры", callback_data="leaderboard")
@@ -555,13 +824,14 @@ def main_menu_keyboard(user_id):
 def show_main_menu(chat_id):
     try:
         user = get_user(chat_id)
+        total_items = sum(item['count'] for item in user['inventory'].values())
         
         text = f"""🏠 **Главное меню**
 
 ⭐ **Баланс:** {user['stars']:,} звезд
-📦 **Предметов:** {sum(item['count'] for item in user['inventory'].values())}
+📦 **Предметов:** {total_items}
 
-Выберите действие:"""
+💡 Выберите действие:"""
         
         bot.send_message(
             chat_id,
@@ -570,7 +840,7 @@ def show_main_menu(chat_id):
             parse_mode='Markdown'
         )
     except Exception as e:
-        print(f"❌ Ошибка в show_main_menu: {e}")
+        logger.error(f"❌ Ошибка в show_main_menu: {e}")
 
 def sell_keyboard(user_id):
     try:
@@ -583,8 +853,9 @@ def sell_keyboard(user_id):
             return keyboard
         
         for item_id, data in inventory.items():
-            real_item_id = item_id.split("_")[1]
-            price = get_item_price(real_item_id, data["type"])
+            price = get_item_price(item_id, data['type'])
+            
+            # Определяем редкость для отображения
             if price >= 1000000:
                 rarity = "💎💎💎"
             elif price >= 50000:
@@ -605,7 +876,7 @@ def sell_keyboard(user_id):
         keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back"))
         return keyboard
     except Exception as e:
-        print(f"❌ Ошибка в sell_keyboard: {e}")
+        logger.error(f"❌ Ошибка в sell_keyboard: {e}")
         keyboard = types.InlineKeyboardMarkup()
         keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back"))
         return keyboard
@@ -624,23 +895,23 @@ def admin_menu_keyboard():
 def admin_cases_keyboard():
     keyboard = types.InlineKeyboardMarkup(row_width=1)
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT case_id, name, enabled, emoji, is_temporary FROM cases ORDER BY case_id')
-        cases = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        for case_id, name, enabled, emoji, is_temporary in cases:
-            status = "✅ Включен" if enabled == 1 else "❌ Выключен"
-            temp_tag = " 🕐" if is_temporary == 1 else ""
-            btn = types.InlineKeyboardButton(
-                f"{emoji} {name}{temp_tag} - {status}",
-                callback_data=f"admin_toggle_case_{case_id}"
-            )
-            keyboard.add(btn)
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT case_id, name, enabled, emoji, is_temporary, price FROM cases ORDER BY price')
+            cases = cur.fetchall()
+            cur.close()
+            
+            for case_id, name, enabled, emoji, is_temporary, price in cases:
+                status = "✅ Включен" if enabled == 1 else "❌ Выключен"
+                temp_tag = " 🕐" if is_temporary == 1 else ""
+                price_text = f"{price:,} ⭐" if price > 0 else "Бесплатно"
+                btn = types.InlineKeyboardButton(
+                    f"{emoji} {name}{temp_tag} - {status} ({price_text})",
+                    callback_data=f"admin_toggle_case_{case_id}"
+                )
+                keyboard.add(btn)
     except Exception as e:
-        print(f"❌ Ошибка в admin_cases_keyboard: {e}")
+        logger.error(f"❌ Ошибка в admin_cases_keyboard: {e}")
     
     keyboard.add(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_back"))
     return keyboard
@@ -649,8 +920,8 @@ def admin_cases_keyboard():
 @bot.message_handler(commands=['start'])
 def start(message):
     try:
-        print(f"✅ Получена команда /start от {message.chat.id}")
         user_id = message.chat.id
+        logger.info(f"✅ /start от {user_id}")
         
         if message.from_user.username:
             update_username(user_id, message.from_user.username)
@@ -663,31 +934,23 @@ def start(message):
 💰 Открывай кейсы, собирай предметы и продавай их!
 
 **Доступные кейсы:**
-🗑️ **Кейс Бомжа** - бесплатный, для старта
-💎 **Премиум Кейс** - 100 ⭐, редкие предметы
-⚡ **Легендарный Кейс** - 500 ⭐, эпические предметы
-🐸 **PePe праздник🔥** - 100 000 ⭐, шанс на Пепе за 1 млн!
-
-**Цены Пепе:**
-🐸 Обычный - 30 000 ⭐
-🐸 Счастливый - 50 000 ⭐
-🐸 Грустный - 60 000 ⭐
-🐸 Злой - 80 000 ⭐
-🐸 ЛЕГЕНДАРНЫЙ - 1 000 000 ⭐ (шанс 1%)
+🗑️ **Кейс Бомжа** - бесплатный
+💎 **Премиум Кейс** - 100 ⭐
+💜 **Мифический Кейс** - 1 000 ⭐
+⚡ **Легендарный Кейс** - 500 ⭐
+❤️ **Элитный Кейс** - 5 000 ⭐
+🌌 **Космический Кейс** - 10 000 ⭐
+🎃 **Хеллоуинский Кейс** - 2 500 ⭐
+🎄 **Новогодний Кейс** - 5 000 ⭐
+🐸 **PePe праздник🔥** - 100 000 ⭐
 
 🎯 **Цель:** Собрать легендарного Пепе и стать самым богатым!
 """
         
-        bot.send_message(
-            user_id,
-            welcome_text,
-            parse_mode='Markdown'
-        )
-        
+        bot.send_message(user_id, welcome_text, parse_mode='Markdown')
         show_main_menu(user_id)
-        print(f"✅ Приветствие отправлено пользователю {user_id}")
     except Exception as e:
-        print(f"❌ Ошибка в start: {e}")
+        logger.error(f"❌ Ошибка в start: {e}")
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
@@ -703,7 +966,7 @@ def admin_panel(message):
             parse_mode='Markdown'
         )
     except Exception as e:
-        print(f"❌ Ошибка в admin_panel: {e}")
+        logger.error(f"❌ Ошибка в admin_panel: {e}")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -726,12 +989,12 @@ def callback_handler(call):
                     user_data['stars'] -= price
                     update_user(user_id, user_data['stars'], user_data['inventory'])
                     bot.delete_message(user_id, call.message.message_id)
-                    threading.Thread(target=animate_case, args=(call, case_id)).start()
+                    threading.Thread(target=animate_case, args=(call, case_id), daemon=True).start()
                 else:
                     bot.answer_callback_query(call.id, f"❌ Недостаточно звезд! Нужно: {price:,} ⭐".replace(',', ' '), show_alert=True)
             else:
                 bot.delete_message(user_id, call.message.message_id)
-                threading.Thread(target=animate_case, args=(call, case_id)).start()
+                threading.Thread(target=animate_case, args=(call, case_id), daemon=True).start()
         
         # --- ПРОФИЛЬ ---
         elif call.data == "profile":
@@ -741,10 +1004,10 @@ def callback_handler(call):
             
             if user_data['inventory']:
                 for item_id, data in user_data['inventory'].items():
-                    real_item_id = item_id.split("_")[1]
-                    price = get_item_price(real_item_id, data["type"])
+                    price = get_item_price(item_id, data['type'])
                     total_value += price * data['count']
                     total_items += data['count']
+                    
                     if price >= 1000000:
                         rarity = "💎💎💎"
                     elif price >= 50000:
@@ -790,11 +1053,10 @@ def callback_handler(call):
             )
         
         elif call.data.startswith("sell_"):
-            item_id = call.data.replace("sell_", "", 1)
+            item_id = call.data.split("_")[1]
             if item_id in user_data['inventory']:
                 item = user_data['inventory'][item_id]
-                real_item_id = item_id.split("_")[1]
-                price = get_item_price(real_item_id, item["type"])
+                price = get_item_price(item_id, item['type'])
                 
                 if price >= 1000000:
                     confirm = types.InlineKeyboardMarkup()
@@ -831,11 +1093,10 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id, "❌ Этого предмета больше нет!", show_alert=True)
         
         elif call.data.startswith("confirm_sell_"):
-            item_id = call.data.replace("confirm_sell_", "", 1)
+            item_id = call.data.split("_")[2]
             if item_id in user_data['inventory']:
                 item = user_data['inventory'][item_id]
-                real_item_id = item_id.split("_")[1]
-                price = get_item_price(real_item_id, item["type"])
+                price = get_item_price(item_id, item['type'])
                 
                 item['count'] -= 1
                 if item['count'] <= 0:
@@ -940,6 +1201,10 @@ def callback_handler(call):
                      "**Типы:**\n"
                      "• `stars` - звезды (параметр: количество)\n"
                      "• `item` - предмет (параметр: ID предмета)\n\n"
+                     "**Доступные ID предметов:**\n"
+                     "`free_1-5`, `premium_1-5`, `legendary_1-5`,\n"
+                     "`halloween_1-5`, `newyear_1-5`, `mythical_1-5`,\n"
+                     "`elite_1-5`, `cosmic_1-5`, `pepe_1-5`\n\n"
                      "**Примеры:**\n"
                      "`WELCOME stars 50 10` - 50 звезд, 10 использований\n"
                      "`GIFT item premium_5 5` - Мега-подарок, 5 использований\n"
@@ -1009,49 +1274,25 @@ def callback_handler(call):
         
         elif call.data.startswith("admin_toggle_case_"):
             case_id = call.data.split("_")[3]
-            print(f"🔄 Переключение кейса: {case_id}")
+            new_status = toggle_case(case_id)
             
-            try:
-                conn = get_db_connection()
-                cur = conn.cursor()
+            if new_status is not None:
+                status_text = "включен" if new_status == 1 else "выключен"
+                bot.answer_callback_query(call.id, f"✅ Кейс {status_text}!", show_alert=False)
                 
-                # Получаем текущее состояние
-                cur.execute('SELECT enabled FROM cases WHERE case_id = %s', (case_id,))
-                result = cur.fetchone()
-                
-                if result:
-                    current = result[0]
-                    new_status = 0 if current == 1 else 1
-                    
-                    # Обновляем
-                    cur.execute('UPDATE cases SET enabled = %s WHERE case_id = %s', (new_status, case_id))
-                    conn.commit()
-                    
-                    status_text = "включен" if new_status == 1 else "выключен"
-                    print(f"✅ Кейс {case_id} {status_text}")
-                    
-                    bot.answer_callback_query(call.id, f"✅ Кейс {status_text}!", show_alert=False)
-                    
-                    # Обновляем клавиатуру
-                    keyboard = admin_cases_keyboard()
-                    bot.edit_message_text(
-                        chat_id=user_id,
-                        message_id=call.message.message_id,
-                        text="🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
-                        parse_mode='Markdown',
-                        reply_markup=keyboard
-                    )
-                else:
-                    bot.answer_callback_query(call.id, "❌ Кейс не найден!", show_alert=True)
-                
-                cur.close()
-                conn.close()
-            except Exception as e:
-                print(f"❌ Ошибка при переключении кейса: {e}")
-                bot.answer_callback_query(call.id, f"❌ Ошибка: {str(e)}", show_alert=True)
+                keyboard = admin_cases_keyboard()
+                bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=call.message.message_id,
+                    text="🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+            else:
+                bot.answer_callback_query(call.id, "❌ Ошибка при переключении кейса!", show_alert=True)
     
     except Exception as e:
-        print(f"❌ Ошибка в callback_handler: {e}")
+        logger.error(f"❌ Ошибка в callback_handler: {e}")
         try:
             bot.answer_callback_query(call.id, f"❌ Ошибка: {str(e)}", show_alert=True)
         except:
@@ -1074,9 +1315,12 @@ def process_promocode(message):
             bot.send_message(user_id, f"❌ {msg}")
         show_main_menu(user_id)
     except Exception as e:
-        print(f"❌ Ошибка в process_promocode: {e}")
+        logger.error(f"❌ Ошибка в process_promocode: {e}")
+        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
+        show_main_menu(message.chat.id)
 
 def process_create_promo(message):
+    """Обработчик создания промокода админом"""
     try:
         user_id = message.chat.id
         if user_id != ADMIN_ID:
@@ -1084,36 +1328,87 @@ def process_create_promo(message):
         
         parts = message.text.strip().split()
         if len(parts) != 4:
-            bot.send_message(user_id, "❌ Неверный формат! Используйте: `название тип параметр использование`", parse_mode='Markdown')
+            bot.send_message(
+                user_id, 
+                "❌ **Неверный формат!**\n\n"
+                "Используйте:\n"
+                "`название_кода тип_награды параметр количество_использований`\n\n"
+                "**Типы:**\n"
+                "• `stars` - звезды (параметр: количество)\n"
+                "• `item` - предмет (параметр: ID предмета)\n\n"
+                "**Доступные ID предметов:**\n"
+                "`free_1` - `free_5`\n"
+                "`premium_1` - `premium_5`\n"
+                "`legendary_1` - `legendary_5`\n"
+                "`halloween_1` - `halloween_5`\n"
+                "`newyear_1` - `newyear_5`\n"
+                "`mythical_1` - `mythical_5`\n"
+                "`elite_1` - `elite_5`\n"
+                "`cosmic_1` - `cosmic_5`\n"
+                "`pepe_1` - `pepe_5`\n\n"
+                "**Примеры:**\n"
+                "`WELCOME stars 50 10` - 50 звезд, 10 использований\n"
+                "`GIFT item premium_5 5` - Мега-подарок, 5 использований\n"
+                "`PEPE item pepe_5 1` - Легендарный Пепе, 1 использование",
+                parse_mode='Markdown'
+            )
             admin_panel(message)
             return
         
-        code, type, param, uses = parts
+        code, promo_type, param, uses = parts
         uses = int(uses)
         
-        if type == 'stars':
+        if promo_type == 'stars':
             stars = int(param)
-            if create_promocode(code, type, None, stars, uses):
-                bot.send_message(user_id, f"✅ Промокод создан!\n🔑 Код: `{code}`\n⭐ Звезды: {stars:,}\n👥 Использований: {uses}", parse_mode='Markdown')
-            else:
-                bot.send_message(user_id, "❌ Ошибка при создании промокода")
-        elif type == 'item':
-            found = False
-            for case_type, items in ITEMS.items():
-                if param in items:
-                    found = True
-                    break
-            if found:
-                if create_promocode(code, type, param, 0, uses):
-                    bot.send_message(user_id, f"✅ Промокод создан!\n🔑 Код: `{code}`\n🎁 Предмет: {param}\n👥 Использований: {uses}", parse_mode='Markdown')
-                else:
-                    bot.send_message(user_id, "❌ Ошибка при создании промокода")
-            else:
-                bot.send_message(user_id, f"❌ Предмет {param} не найден!\nДоступные ID: premium_1-5, free_1-5, halloween_1-5, newyear_1-5, legendary_1-5, pepe_1-5")
+            success, msg = create_promocode(code, promo_type, None, stars, uses)
+            bot.send_message(user_id, msg, parse_mode='Markdown')
+            
+        elif promo_type == 'item':
+            # Проверяем формат предмета
+            case_type, item_num = validate_item_id(param)
+            if not case_type:
+                bot.send_message(
+                    user_id,
+                    f"❌ **Ошибка!**\n\n"
+                    f"Предмет '{param}' не найден!\n\n"
+                    "**Правильный формат:** `кейс_номер`\n"
+                    "**Примеры:** `premium_5`, `pepe_1`, `legendary_3`\n\n"
+                    "**Доступные кейсы:**\n"
+                    "• free (1-5)\n"
+                    "• premium (1-5)\n"
+                    "• legendary (1-5)\n"
+                    "• halloween (1-5)\n"
+                    "• newyear (1-5)\n"
+                    "• mythical (1-5)\n"
+                    "• elite (1-5)\n"
+                    "• cosmic (1-5)\n"
+                    "• pepe (1-5)",
+                    parse_mode='Markdown'
+                )
+                admin_panel(message)
+                return
+            
+            # Создаем промокод
+            success, msg = create_promocode(code, promo_type, param, 0, uses)
+            bot.send_message(user_id, msg, parse_mode='Markdown')
+            
         else:
-            bot.send_message(user_id, "❌ Неизвестный тип! Используйте `stars` или `item`")
+            bot.send_message(
+                user_id,
+                f"❌ **Ошибка!**\n\n"
+                f"Неизвестный тип: '{promo_type}'\n"
+                "Используйте `stars` или `item`",
+                parse_mode='Markdown'
+            )
+            
     except ValueError:
-        bot.send_message(user_id, "❌ Неверный формат! Количество использования должно быть числом")
+        bot.send_message(
+            user_id,
+            "❌ **Ошибка!**\n\n"
+            "Количество использований должно быть числом!\n"
+            "Пример: `GIFT item premium_5 5` - где 5 это количество использований",
+            parse_mode='Markdown'
+        )
     except Exception as e:
         bot.send_message(user_id, f"❌ Ошибка: {str(e)}")
     
@@ -1153,22 +1448,22 @@ def process_broadcast(message):
 # ================= ЗАПУСК =================
 if __name__ == '__main__':
     try:
-        print("🤖 Бот запускается...")
+        logger.info("🤖 Бот запускается...")
         init_db()
-        print("✅ База данных PostgreSQL готова")
-        print(f"👑 Админ ID: {ADMIN_ID}")
-        print("🚀 Бот готов к работе!")
-        print("\n📌 Доступные кейсы:")
-        print("   🗑️ Кейс Бомжа - бесплатный")
-        print("   💎 Премиум Кейс - 100 ⭐")
-        print("   ⚡ Легендарный Кейс - 500 ⭐")
-        print("   🐸 PePe праздник🔥 - 100 000 ⭐")
-        print("\n📊 Цены Пепе:")
-        print("   🐸 Обычный - 30 000 ⭐")
-        print("   🐸 Счастливый - 50 000 ⭐")
-        print("   🐸 Грустный - 60 000 ⭐")
-        print("   🐸 Злой - 80 000 ⭐")
-        print("   🐸 ЛЕГЕНДАРНЫЙ - 1 000 000 ⭐ (шанс 1%)")
+        logger.info("✅ База данных PostgreSQL готова")
+        logger.info(f"👑 Админ ID: {ADMIN_ID}")
+        logger.info("🚀 Бот готов к работе!")
+        logger.info("\n📌 Доступные кейсы:")
+        logger.info("   🗑️ Кейс Бомжа - бесплатный")
+        logger.info("   💎 Премиум Кейс - 100 ⭐")
+        logger.info("   💜 Мифический Кейс - 1 000 ⭐")
+        logger.info("   ⚡ Легендарный Кейс - 500 ⭐")
+        logger.info("   ❤️ Элитный Кейс - 5 000 ⭐")
+        logger.info("   🌌 Космический Кейс - 10 000 ⭐")
+        logger.info("   🎃 Хеллоуинский Кейс - 2 500 ⭐")
+        logger.info("   🎄 Новогодний Кейс - 5 000 ⭐")
+        logger.info("   🐸 PePe праздник🔥 - 100 000 ⭐")
         bot.infinity_polling()
     except Exception as e:
-        print(f"❌ Критическая ошибка: {e}")
+        logger.error(f"❌ Критическая ошибка: {e}")
+        sys.exit(1)
