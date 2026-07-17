@@ -12,9 +12,13 @@ from psycopg2 import pool
 from contextlib import contextmanager
 import logging
 from datetime import datetime
+from typing import Optional, Dict, Any, Tuple, List
 
 # ================= НАСТРОЙКА ЛОГИРОВАНИЯ =================
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # ================= КОНФИГ =================
@@ -147,7 +151,9 @@ class Database:
         database_url = os.environ.get('DATABASE_URL')
         if database_url:
             try:
-                self.pool = psycopg2.pool.SimpleConnectionPool(1, 20, database_url, sslmode='require')
+                self.pool = psycopg2.pool.SimpleConnectionPool(
+                    1, 20, database_url, sslmode='require'
+                )
                 logger.info("✅ Пул подключений PostgreSQL создан")
             except Exception as e:
                 logger.error(f"❌ Ошибка создания пула: {e}")
@@ -172,6 +178,11 @@ class Database:
             if conn:
                 self.pool.putconn(conn)
 
+    def close_all_connections(self):
+        if self.pool:
+            self.pool.closeall()
+            logger.info("✅ Все соединения с БД закрыты")
+
 db = Database()
 
 # ================= ИНИЦИАЛИЗАЦИЯ БАЗЫ =================
@@ -180,6 +191,7 @@ def init_db():
         with db.get_connection() as conn:
             cur = conn.cursor()
             
+            # Таблица пользователей
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
@@ -189,6 +201,7 @@ def init_db():
                 )
             ''')
             
+            # Таблица промокодов
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS promocodes (
                     code TEXT PRIMARY KEY,
@@ -200,6 +213,7 @@ def init_db():
                 )
             ''')
             
+            # Таблица кейсов
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS cases (
                     case_id TEXT PRIMARY KEY,
@@ -211,6 +225,7 @@ def init_db():
                 )
             ''')
             
+            # Все кейсы
             all_cases = [
                 ('free', '🗑️ Кейс Бомжа', 1, 0, 0, '🗑️'),
                 ('premium', '💎 Премиум Кейс', 1, 100, 0, '💎'),
@@ -243,7 +258,8 @@ def init_db():
         return False
 
 # ================= ФУНКЦИИ РАБОТЫ С ПОЛЬЗОВАТЕЛЯМИ =================
-def get_user(user_id):
+def get_user(user_id: int) -> Dict[str, Any]:
+    """Получение данных пользователя с обработкой ошибок"""
     try:
         with db.get_connection() as conn:
             cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -251,27 +267,32 @@ def get_user(user_id):
             result = cur.fetchone()
             
             if result:
+                inventory = json.loads(result['inventory']) if result['inventory'] else {}
                 return {
                     'stars': result['stars'],
-                    'inventory': json.loads(result['inventory']),
+                    'inventory': inventory,
                     'username': result['username'] or ''
                 }
             else:
-                cur.execute('INSERT INTO users (user_id, stars, inventory, username) VALUES (%s, %s, %s, %s)',
-                            (user_id, 15, json.dumps({}), ''))
+                cur.execute(
+                    'INSERT INTO users (user_id, stars, inventory, username) VALUES (%s, %s, %s, %s)',
+                    (user_id, 15, json.dumps({}), '')
+                )
                 conn.commit()
-                cur.close()
                 return {'stars': 15, 'inventory': {}, 'username': ''}
     except Exception as e:
         logger.error(f"❌ Ошибка в get_user: {e}")
         return {'stars': 15, 'inventory': {}, 'username': ''}
 
-def update_user(user_id, stars, inventory):
+def update_user(user_id: int, stars: int, inventory: Dict[str, Any]) -> bool:
+    """Обновление данных пользователя с транзакцией"""
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
-            cur.execute('UPDATE users SET stars = %s, inventory = %s WHERE user_id = %s',
-                        (stars, json.dumps(inventory), user_id))
+            cur.execute(
+                'UPDATE users SET stars = %s, inventory = %s WHERE user_id = %s',
+                (stars, json.dumps(inventory), user_id)
+            )
             conn.commit()
             cur.close()
             return True
@@ -279,7 +300,7 @@ def update_user(user_id, stars, inventory):
         logger.error(f"❌ Ошибка в update_user: {e}")
         return False
 
-def update_username(user_id, username):
+def update_username(user_id: int, username: str) -> bool:
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -291,7 +312,7 @@ def update_username(user_id, username):
         logger.error(f"❌ Ошибка в update_username: {e}")
         return False
 
-def get_all_users():
+def get_all_users() -> List[int]:
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -303,7 +324,7 @@ def get_all_users():
         logger.error(f"❌ Ошибка в get_all_users: {e}")
         return []
 
-def get_all_users_data():
+def get_all_users_data() -> List[Tuple[int, int, str]]:
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -337,7 +358,7 @@ def get_all_users_data():
         return []
 
 # ================= ФУНКЦИИ РАБОТЫ С КЕЙСАМИ =================
-def is_case_enabled(case_id):
+def is_case_enabled(case_id: str) -> bool:
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -349,7 +370,7 @@ def is_case_enabled(case_id):
         logger.error(f"❌ Ошибка в is_case_enabled: {e}")
         return False
 
-def get_case_price(case_id):
+def get_case_price(case_id: str) -> int:
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -361,7 +382,7 @@ def get_case_price(case_id):
         logger.error(f"❌ Ошибка в get_case_price: {e}")
         return 0
 
-def get_case_name(case_id):
+def get_case_name(case_id: str) -> Tuple[str, str]:
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -373,7 +394,7 @@ def get_case_name(case_id):
         logger.error(f"❌ Ошибка в get_case_name: {e}")
         return (case_id, '🎁')
 
-def toggle_case(case_id):
+def toggle_case(case_id: str) -> Optional[int]:
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -391,8 +412,10 @@ def toggle_case(case_id):
         logger.error(f"❌ Ошибка в toggle_case: {e}")
         return None
 
-def get_item_price(item_id, case_type=None):
+def get_item_price(item_id: str, case_type: Optional[str] = None) -> int:
+    """Получение цены предмета с обработкой всех форматов"""
     try:
+        # Если item_id содержит подчеркивание (например premium_5)
         if '_' in item_id:
             parts = item_id.split('_')
             if len(parts) == 2:
@@ -402,10 +425,12 @@ def get_item_price(item_id, case_type=None):
                 if case_type in PRICES and item_num in PRICES[case_type]:
                     return PRICES[case_type][item_num]
         
+        # Если передан тип
         if case_type and case_type in PRICES:
             if item_id in PRICES[case_type]:
                 return PRICES[case_type][item_id]
         
+        # Пробуем найти по всем типам
         for ct, prices in PRICES.items():
             if item_id in prices:
                 return prices[item_id]
@@ -417,29 +442,35 @@ def get_item_price(item_id, case_type=None):
         logger.error(f"❌ Ошибка в get_item_price: {e}")
         return 1
 
-def open_case(case_type):
-    if case_type == 'pepe':
-        if random.randint(1, 100) <= PEPE_LEGENDARY_CHANCE:
-            return '5', ITEMS['pepe']['5']
+def open_case(case_type: str) -> Tuple[str, str]:
+    """Открытие кейса с проверкой шансов"""
+    try:
+        if case_type == 'pepe':
+            if random.randint(1, 100) <= PEPE_LEGENDARY_CHANCE:
+                return '5', ITEMS['pepe']['5']
+            
+            rand_num = random.randint(1, 100)
+            cumulative = 0
+            for item_id, chance in CHANCES['pepe'].items():
+                cumulative += chance
+                if rand_num <= cumulative:
+                    return item_id, ITEMS['pepe'][item_id]
         
         rand_num = random.randint(1, 100)
         cumulative = 0
-        for item_id, chance in CHANCES['pepe'].items():
+        for item_id, chance in CHANCES.get(case_type, {}).items():
             cumulative += chance
             if rand_num <= cumulative:
-                return item_id, ITEMS['pepe'][item_id]
-    
-    rand_num = random.randint(1, 100)
-    cumulative = 0
-    for item_id, chance in CHANCES.get(case_type, {}).items():
-        cumulative += chance
-        if rand_num <= cumulative:
-            return item_id, ITEMS[case_type][item_id]
-    
-    return '1', 'Ошибка'
+                return item_id, ITEMS[case_type][item_id]
+        
+        return '1', 'Ошибка'
+    except Exception as e:
+        logger.error(f"❌ Ошибка в open_case: {e}")
+        return '1', 'Ошибка'
 
 # ================= ФУНКЦИИ РАБОТЫ С ПРОМОКОДАМИ =================
-def validate_item_id(item_id):
+def validate_item_id(item_id: str) -> Optional[str]:
+    """Проверка существования предмета в формате: case_type_number"""
     if not item_id or '_' not in item_id:
         return None
     
@@ -457,7 +488,8 @@ def validate_item_id(item_id):
     
     return case_type
 
-def parse_item_id(item_id):
+def parse_item_id(item_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """Парсит строку вида premium_5 и возвращает (case_type, item_num)"""
     if not item_id or '_' not in item_id:
         return None, None
     
@@ -467,7 +499,8 @@ def parse_item_id(item_id):
     
     return parts[0], parts[1]
 
-def create_promocode(code, type, item_id=None, stars=0, uses=1):
+def create_promocode(code: str, type: str, item_id: Optional[str] = None, 
+                     stars: int = 0, uses: int = 1) -> Tuple[bool, str]:
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -499,7 +532,7 @@ def create_promocode(code, type, item_id=None, stars=0, uses=1):
         logger.error(f"❌ Ошибка в create_promocode: {e}")
         return False, f"❌ Ошибка: {str(e)}"
 
-def delete_promocode(code):
+def delete_promocode(code: str) -> bool:
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -511,7 +544,7 @@ def delete_promocode(code):
         logger.error(f"❌ Ошибка в delete_promocode: {e}")
         return False
 
-def get_all_promocodes():
+def get_all_promocodes() -> List[Tuple[str, str, str, int, int]]:
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -523,7 +556,7 @@ def get_all_promocodes():
         logger.error(f"❌ Ошибка в get_all_promocodes: {e}")
         return []
 
-def use_promocode(code, user_id):
+def use_promocode(code: str, user_id: int) -> Tuple[Optional[str], str]:
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -604,13 +637,14 @@ def use_promocode(code, user_id):
         return None, f"❌ Ошибка: {str(e)}"
 
 # ================= ФУНКЦИЯ ПРОДАЖИ =================
-def sell_item(user_id, item_id):
+def sell_item(user_id: int, item_id: str) -> Tuple[bool, str]:
+    """Продажа предмета с транзакцией"""
     try:
         user_data = get_user(user_id)
         inventory = user_data['inventory']
         
         if item_id not in inventory:
-            return False, "❌ Предмет не найден"
+            return False, "❌ Предмет не найден в инвентаре"
         
         item = inventory[item_id]
         price = get_item_price(item_id, item.get('type', ''))
@@ -618,10 +652,12 @@ def sell_item(user_id, item_id):
         if price <= 0:
             return False, "❌ Этот предмет нельзя продать"
         
+        # Уменьшаем количество
         item['count'] -= 1
         if item['count'] <= 0:
             del inventory[item_id]
         
+        # Добавляем звезды
         user_data['stars'] += price
         update_user(user_id, user_data['stars'], inventory)
         
@@ -631,7 +667,7 @@ def sell_item(user_id, item_id):
         return False, f"❌ Ошибка: {str(e)}"
 
 # ================= АНИМАЦИЯ =================
-def animate_case(call, case_type):
+def animate_case(call: types.CallbackQuery, case_type: str):
     try:
         message = call.message
         case_name, emoji = get_case_name(case_type)
@@ -664,14 +700,18 @@ def animate_case(call, case_type):
             except:
                 pass
         
+        # Открываем кейс
         item_id, item_name = open_case(case_type)
         
+        # Получаем данные пользователя
         user_data = get_user(message.chat.id)
         inventory = user_data['inventory']
         
+        # Сохраняем предмет с полным ID
         full_item_id = f"{case_type}_{item_id}"
         if full_item_id in inventory:
             inventory[full_item_id]['count'] += 1
+            inventory[full_item_id]['type'] = case_type
         else:
             inventory[full_item_id] = {
                 'name': item_name,
@@ -679,10 +719,13 @@ def animate_case(call, case_type):
                 'type': case_type
             }
         
+        # Сохраняем изменения
         update_user(message.chat.id, user_data['stars'], inventory)
         
+        # Получаем цену
         price = get_item_price(item_id, case_type)
         
+        # Определяем редкость
         if price >= 1000000:
             rarity = "🔥🔥🔥 **ЛЕГЕНДАРНО!** 🔥🔥🔥"
         elif price >= 50000:
@@ -713,9 +756,13 @@ def animate_case(call, case_type):
         show_main_menu(message.chat.id)
     except Exception as e:
         logger.error(f"❌ Ошибка в animate_case: {e}")
+        try:
+            bot.send_message(call.message.chat.id, f"❌ Ошибка при открытии кейса: {str(e)}")
+        except:
+            pass
 
 # ================= КЛАВИАТУРЫ =================
-def main_menu_keyboard(user_id):
+def main_menu_keyboard(user_id: int) -> types.InlineKeyboardMarkup:
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     
     case_list = [
@@ -757,7 +804,7 @@ def main_menu_keyboard(user_id):
     
     return keyboard
 
-def show_main_menu(chat_id):
+def show_main_menu(chat_id: int):
     try:
         user = get_user(chat_id)
         total_items = sum(item['count'] for item in user['inventory'].values())
@@ -778,7 +825,7 @@ def show_main_menu(chat_id):
     except Exception as e:
         logger.error(f"❌ Ошибка в show_main_menu: {e}")
 
-def sell_keyboard(user_id):
+def sell_keyboard(user_id: int) -> types.InlineKeyboardMarkup:
     try:
         user = get_user(user_id)
         inventory = user['inventory']
@@ -788,6 +835,7 @@ def sell_keyboard(user_id):
             keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back"))
             return keyboard
         
+        # Сортируем предметы по цене
         sorted_items = sorted(
             inventory.items(),
             key=lambda x: get_item_price(x[0], x[1].get('type', '')),
@@ -822,7 +870,7 @@ def sell_keyboard(user_id):
         keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back"))
         return keyboard
 
-def admin_menu_keyboard():
+def admin_menu_keyboard() -> types.InlineKeyboardMarkup:
     keyboard = types.InlineKeyboardMarkup(row_width=1)
     keyboard.add(
         types.InlineKeyboardButton("📊 Промокоды", callback_data="admin_promocodes"),
@@ -833,7 +881,7 @@ def admin_menu_keyboard():
     )
     return keyboard
 
-def admin_cases_keyboard():
+def admin_cases_keyboard() -> types.InlineKeyboardMarkup:
     keyboard = types.InlineKeyboardMarkup(row_width=1)
     try:
         with db.get_connection() as conn:
@@ -857,9 +905,9 @@ def admin_cases_keyboard():
     keyboard.add(types.InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_back"))
     return keyboard
 
-# ================= ОБРАБОТЧИКИ =================
+# ================= ОБРАБОТЧИКИ КОМАНД =================
 @bot.message_handler(commands=['start'])
-def start(message):
+def start(message: types.Message):
     try:
         user_id = message.chat.id
         logger.info(f"✅ /start от {user_id}")
@@ -894,7 +942,7 @@ def start(message):
         logger.error(f"❌ Ошибка в start: {e}")
 
 @bot.message_handler(commands=['admin'])
-def admin_panel(message):
+def admin_panel(message: types.Message):
     try:
         if message.chat.id != ADMIN_ID:
             bot.reply_to(message, "⛔ Доступ запрещен!")
@@ -909,43 +957,50 @@ def admin_panel(message):
     except Exception as e:
         logger.error(f"❌ Ошибка в admin_panel: {e}")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("case_") or call.data == "case")
-def handle_case(call):
+# ================= ОБРАБОТЧИКИ CALLBACK =================
+@bot.callback_query_handler(func=lambda call: call.data.startswith("case_"))
+def handle_case(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
         user_data = get_user(user_id)
+        case_id = call.data.replace("case_", "")
         
-        if call.data.startswith("case_"):
-            case_id = call.data.split("_")[1]
-            
-            if not is_case_enabled(case_id):
-                bot.answer_callback_query(call.id, "❌ Этот кейс временно отключен!", show_alert=True)
-                return
-            
-            price = get_case_price(case_id)
-            
-            if price > 0:
-                if user_data['stars'] >= price:
-                    user_data['stars'] -= price
-                    update_user(user_id, user_data['stars'], user_data['inventory'])
-                    try:
-                        bot.delete_message(user_id, call.message.message_id)
-                    except:
-                        pass
-                    threading.Thread(target=animate_case, args=(call, case_id), daemon=True).start()
-                else:
-                    bot.answer_callback_query(call.id, f"❌ Недостаточно звезд! Нужно: {price:,} ⭐".replace(',', ' '), show_alert=True)
-            else:
+        if not is_case_enabled(case_id):
+            bot.answer_callback_query(call.id, "❌ Этот кейс временно отключен!", show_alert=True)
+            return
+        
+        price = get_case_price(case_id)
+        
+        if price > 0:
+            if user_data['stars'] >= price:
+                user_data['stars'] -= price
+                update_user(user_id, user_data['stars'], user_data['inventory'])
                 try:
                     bot.delete_message(user_id, call.message.message_id)
                 except:
                     pass
                 threading.Thread(target=animate_case, args=(call, case_id), daemon=True).start()
+            else:
+                bot.answer_callback_query(
+                    call.id, 
+                    f"❌ Недостаточно звезд! Нужно: {price:,} ⭐".replace(',', ' '), 
+                    show_alert=True
+                )
+        else:
+            try:
+                bot.delete_message(user_id, call.message.message_id)
+            except:
+                pass
+            threading.Thread(target=animate_case, args=(call, case_id), daemon=True).start()
     except Exception as e:
         logger.error(f"❌ Ошибка в handle_case: {e}")
+        try:
+            bot.answer_callback_query(call.id, f"❌ Ошибка: {str(e)}", show_alert=True)
+        except:
+            pass
 
 @bot.callback_query_handler(func=lambda call: call.data == "profile")
-def handle_profile(call):
+def handle_profile(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
         user_data = get_user(user_id)
@@ -1018,7 +1073,7 @@ def handle_profile(call):
         logger.error(f"❌ Ошибка в handle_profile: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "sell")
-def handle_sell_menu(call):
+def handle_sell_menu(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
         keyboard = sell_keyboard(user_id)
@@ -1041,19 +1096,22 @@ def handle_sell_menu(call):
         logger.error(f"❌ Ошибка в handle_sell_menu: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("sell_"))
-def handle_sell_item(call):
+def handle_sell_item(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
-        item_id = call.data.split("_")[1]
+        # Получаем полный ID предмета (например premium_5)
+        item_id = call.data.replace("sell_", "")
         user_data = get_user(user_id)
         
+        # Проверяем наличие предмета в инвентаре
         if item_id not in user_data['inventory']:
-            bot.answer_callback_query(call.id, "❌ Предмет не найден!", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Предмет не найден в инвентаре!", show_alert=True)
             return
         
         item = user_data['inventory'][item_id]
         price = get_item_price(item_id, item.get('type', ''))
         
+        # Если предмет очень дорогой - запрашиваем подтверждение
         if price >= 1000000:
             confirm = types.InlineKeyboardMarkup()
             confirm.add(
@@ -1077,10 +1135,12 @@ def handle_sell_item(call):
                 )
             return
         
+        # Обычная продажа
         success, msg = sell_item(user_id, item_id)
         bot.answer_callback_query(call.id, msg, show_alert=False)
         
         if success:
+            # Обновляем меню продажи
             keyboard = sell_keyboard(user_id)
             try:
                 bot.edit_message_text(
@@ -1105,10 +1165,10 @@ def handle_sell_item(call):
             pass
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_sell_"))
-def handle_confirm_sell(call):
+def handle_confirm_sell(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
-        item_id = call.data.split("_")[2]
+        item_id = call.data.replace("confirm_sell_", "")
         
         success, msg = sell_item(user_id, item_id)
         bot.answer_callback_query(call.id, msg, show_alert=False)
@@ -1132,9 +1192,13 @@ def handle_confirm_sell(call):
                 )
     except Exception as e:
         logger.error(f"❌ Ошибка в handle_confirm_sell: {e}")
+        try:
+            bot.answer_callback_query(call.id, f"❌ Ошибка: {str(e)}", show_alert=True)
+        except:
+            pass
 
 @bot.callback_query_handler(func=lambda call: call.data == "leaderboard")
-def handle_leaderboard(call):
+def handle_leaderboard(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
         users = get_all_users_data()
@@ -1174,7 +1238,7 @@ def handle_leaderboard(call):
         logger.error(f"❌ Ошибка в handle_leaderboard: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "promocode")
-def handle_promocode(call):
+def handle_promocode(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
         try:
@@ -1201,7 +1265,7 @@ def handle_promocode(call):
         logger.error(f"❌ Ошибка в handle_promocode: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "back")
-def handle_back(call):
+def handle_back(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
         try:
@@ -1212,8 +1276,9 @@ def handle_back(call):
     except Exception as e:
         logger.error(f"❌ Ошибка в handle_back: {e}")
 
+# ================= АДМИН ОБРАБОТЧИКИ CALLBACK =================
 @bot.callback_query_handler(func=lambda call: call.data == "admin_back")
-def handle_admin_back(call):
+def handle_admin_back(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
         try:
@@ -1225,7 +1290,7 @@ def handle_admin_back(call):
         logger.error(f"❌ Ошибка в handle_admin_back: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_promocodes")
-def handle_admin_promocodes(call):
+def handle_admin_promocodes(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
         codes = get_all_promocodes()
@@ -1268,7 +1333,7 @@ def handle_admin_promocodes(call):
         logger.error(f"❌ Ошибка в handle_admin_promocodes: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_create_promo")
-def handle_admin_create_promo(call):
+def handle_admin_create_promo(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
         text = """📝 **Создание промокода**
@@ -1313,10 +1378,10 @@ def handle_admin_create_promo(call):
         logger.error(f"❌ Ошибка в handle_admin_create_promo: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_delete_promo_"))
-def handle_admin_delete_promo(call):
+def handle_admin_delete_promo(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
-        code = call.data.split("_")[3]
+        code = call.data.replace("admin_delete_promo_", "")
         delete_promocode(code)
         bot.answer_callback_query(call.id, "✅ Промокод удален!", show_alert=False)
         
@@ -1360,7 +1425,7 @@ def handle_admin_delete_promo(call):
         logger.error(f"❌ Ошибка в handle_admin_delete_promo: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
-def handle_admin_broadcast(call):
+def handle_admin_broadcast(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
         try:
@@ -1387,7 +1452,7 @@ def handle_admin_broadcast(call):
         logger.error(f"❌ Ошибка в handle_admin_broadcast: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_cases")
-def handle_admin_cases(call):
+def handle_admin_cases(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
         keyboard = admin_cases_keyboard()
@@ -1410,10 +1475,10 @@ def handle_admin_cases(call):
         logger.error(f"❌ Ошибка в handle_admin_cases: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_toggle_case_"))
-def handle_admin_toggle_case(call):
+def handle_admin_toggle_case(call: types.CallbackQuery):
     try:
         user_id = call.message.chat.id
-        case_id = call.data.split("_")[3]
+        case_id = call.data.replace("admin_toggle_case_", "")
         new_status = toggle_case(case_id)
         
         if new_status is not None:
@@ -1442,7 +1507,7 @@ def handle_admin_toggle_case(call):
         logger.error(f"❌ Ошибка в handle_admin_toggle_case: {e}")
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =================
-def process_promocode(message):
+def process_promocode(message: types.Message):
     try:
         user_id = message.chat.id
         code = message.text.strip()
@@ -1462,7 +1527,7 @@ def process_promocode(message):
         bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
         show_main_menu(message.chat.id)
 
-def process_create_promo(message):
+def process_create_promo(message: types.Message):
     try:
         user_id = message.chat.id
         if user_id != ADMIN_ID:
@@ -1493,7 +1558,7 @@ def process_create_promo(message):
     
     admin_panel(message)
 
-def process_broadcast(message):
+def process_broadcast(message: types.Message):
     try:
         user_id = message.chat.id
         if user_id != ADMIN_ID:
@@ -1533,6 +1598,11 @@ if __name__ == '__main__':
         logger.info(f"👑 Админ ID: {ADMIN_ID}")
         logger.info("🚀 Бот готов к работе!")
         bot.infinity_polling()
+    except KeyboardInterrupt:
+        logger.info("👋 Бот остановлен пользователем")
+        db.close_all_connections()
+        sys.exit(0)
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}")
+        db.close_all_connections()
         sys.exit(1)
