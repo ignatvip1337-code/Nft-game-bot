@@ -11,6 +11,7 @@ from psycopg2.extras import RealDictCursor
 from psycopg2 import pool
 from contextlib import contextmanager
 import logging
+from datetime import datetime
 
 # ================= НАСТРОЙКА ЛОГИРОВАНИЯ =================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -308,13 +309,26 @@ def get_all_users():
         return []
 
 def get_all_users_data():
+    """Получение данных всех пользователей для таблицы лидеров"""
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
-            cur.execute('SELECT user_id, stars, username FROM users ORDER BY stars DESC')
+            cur.execute('''
+                SELECT user_id, stars, username 
+                FROM users 
+                ORDER BY stars DESC 
+                LIMIT 50
+            ''')
             users = cur.fetchall()
             cur.close()
-            return users
+            
+            # Форматируем данные для вывода
+            formatted_users = []
+            for user_id, stars, username in users:
+                display_name = username if username and username != '' else f"👤 {user_id}"
+                formatted_users.append((user_id, stars, display_name))
+            
+            return formatted_users
     except Exception as e:
         logger.error(f"❌ Ошибка в get_all_users_data: {e}")
         return []
@@ -375,6 +389,23 @@ def toggle_case(case_id):
         return None
 
 def get_item_price(item_id, case_type):
+    """Получение цены предмета по его ID и типу кейса"""
+    # Если case_type не передан, пытаемся определить по item_id
+    if not case_type and '_' in item_id:
+        parts = item_id.split('_')
+        if len(parts) == 2:
+            case_type = parts[0]
+    
+    if case_type and case_type in PRICES:
+        # Если item_id содержит подчеркивание, извлекаем номер
+        if '_' in item_id:
+            parts = item_id.split('_')
+            if len(parts) == 2 and parts[1] in PRICES[case_type]:
+                return PRICES[case_type][parts[1]]
+        # Иначе ищем как есть
+        elif item_id in PRICES[case_type]:
+            return PRICES[case_type][item_id]
+    
     return PRICES.get(case_type, {}).get(item_id, 1)
 
 def open_case(case_type):
@@ -400,7 +431,7 @@ def open_case(case_type):
     
     return '1', 'Ошибка'
 
-# ================= ФУНКЦИИ РАБОТЫ С ПРОМОКОДАМИ (ИСПРАВЛЕННЫЕ) =================
+# ================= ФУНКЦИИ РАБОТЫ С ПРОМОКОДАМИ =================
 def validate_item_id(item_id):
     """
     Проверка существования предмета в формате: case_type_itemId
@@ -522,7 +553,6 @@ def use_promocode(code, user_id):
             
             # Проверяем остаток использований
             if len(used_by) >= uses:
-                # Автоматически удаляем промокод
                 cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
                 conn.commit()
                 return None, "❌ Промокод уже использован максимальное количество раз"
@@ -535,11 +565,9 @@ def use_promocode(code, user_id):
                 update_user(user_id, user_data['stars'], user_data['inventory'])
                 used_by.append(user_str)
                 
-                # Обновляем использовавших
                 cur.execute('UPDATE promocodes SET used_by = %s WHERE code = %s', (json.dumps(used_by), code))
                 conn.commit()
                 
-                # Проверяем нужно ли удалить
                 if len(used_by) >= uses:
                     cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
                     conn.commit()
@@ -561,20 +589,23 @@ def use_promocode(code, user_id):
                 item_name = ITEMS[case_type][item_num]
                 inventory = user_data['inventory']
                 
-                # Добавляем предмет в инвентарь
+                # Сохраняем предмет с правильным type
                 if item_id in inventory:
                     inventory[item_id]['count'] += 1
+                    inventory[item_id]['type'] = case_type  # Обновляем тип на всякий случай
                 else:
-                    inventory[item_id] = {'name': item_name, 'count': 1, 'type': case_type}
+                    inventory[item_id] = {
+                        'name': item_name,
+                        'count': 1,
+                        'type': case_type  # Критически важно для продажи!
+                    }
                 
                 update_user(user_id, user_data['stars'], inventory)
                 used_by.append(user_str)
                 
-                # Обновляем использовавших
                 cur.execute('UPDATE promocodes SET used_by = %s WHERE code = %s', (json.dumps(used_by), code))
                 conn.commit()
                 
-                # Проверяем нужно ли удалить
                 if len(used_by) >= uses:
                     cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
                     conn.commit()
@@ -611,13 +642,16 @@ def animate_case(call, case_type):
         
         for frame in animation_frames:
             time.sleep(0.25)
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=anim_msg.message_id,
-                text=f"{emoji} **Открываем {case_name}...**\n\n"
-                     f"{' '.join(frame)}",
-                parse_mode='Markdown'
-            )
+            try:
+                bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=anim_msg.message_id,
+                    text=f"{emoji} **Открываем {case_name}...**\n\n"
+                         f"{' '.join(frame)}",
+                    parse_mode='Markdown'
+                )
+            except:
+                pass  # Игнорируем ошибки редактирования
         
         # Открываем кейс
         item_id, item_name = open_case(case_type)
@@ -652,12 +686,15 @@ def animate_case(call, case_type):
         final_text += f"💰 Цена продажи: **{price:,}** ⭐\n"
         final_text += f"\n💡 Предмет добавлен в инвентарь!"
         
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=anim_msg.message_id,
-            text=final_text,
-            parse_mode='Markdown'
-        )
+        try:
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=anim_msg.message_id,
+                text=final_text,
+                parse_mode='Markdown'
+            )
+        except:
+            bot.send_message(message.chat.id, final_text, parse_mode='Markdown')
         
         time.sleep(0.5)
         show_main_menu(message.chat.id)
@@ -817,6 +854,7 @@ def start(message):
         user_id = message.chat.id
         logger.info(f"✅ /start от {user_id}")
         
+        # Обновляем username при каждом запуске
         if message.from_user.username:
             update_username(user_id, message.from_user.username)
         
@@ -892,6 +930,13 @@ def callback_handler(call):
         
         # --- ПРОФИЛЬ ---
         elif call.data == "profile":
+            # Обновляем username при просмотре профиля
+            try:
+                if call.message.from_user.username:
+                    update_username(user_id, call.message.from_user.username)
+            except:
+                pass
+            
             inv_text = ""
             total_items = 0
             total_value = 0
@@ -916,8 +961,13 @@ def callback_handler(call):
             else:
                 inv_text = "Пусто"
             
-            text = f"""👤 **Ваш профиль**
+            # Получаем актуальный username
+            user_full = get_user(user_id)
+            display_name = user_full['username'] or f"ID:{user_id}"
+            
+            text = f"""👤 **Профиль игрока**
 
+👤 **Имя:** {display_name}
 ⭐ **Звезды:** {user_data['stars']:,}
 📦 **Предметов:** {total_items}
 💰 **Общая стоимость:** {total_value:,} ⭐
@@ -931,6 +981,7 @@ def callback_handler(call):
                 text=text,
                 parse_mode='Markdown',
                 reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔄 Обновить", callback_data="profile"),
                     types.InlineKeyboardButton("🔙 Назад", callback_data="back")
                 )
             )
@@ -938,13 +989,21 @@ def callback_handler(call):
         # --- ПРОДАЖА ---
         elif call.data == "sell":
             keyboard = sell_keyboard(user_id)
-            bot.edit_message_text(
-                chat_id=user_id,
-                message_id=call.message.message_id,
-                text="💰 **Выберите предмет для продажи:**",
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
+            try:
+                bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=call.message.message_id,
+                    text="💰 **Выберите предмет для продажи:**",
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+            except:
+                bot.send_message(
+                    user_id,
+                    "💰 **Выберите предмет для продажи:**",
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
         
         elif call.data.startswith("sell_"):
             item_id = call.data.split("_")[1]
@@ -958,13 +1017,21 @@ def callback_handler(call):
                         types.InlineKeyboardButton("✅ Да, продать", callback_data=f"confirm_sell_{item_id}"),
                         types.InlineKeyboardButton("❌ Нет", callback_data="sell")
                     )
-                    bot.edit_message_text(
-                        chat_id=user_id,
-                        message_id=call.message.message_id,
-                        text=f"⚠️ **Вы уверены?**\nВы хотите продать **{item['name']}** за {price:,} ⭐\n\nЭто очень ценный предмет!",
-                        parse_mode='Markdown',
-                        reply_markup=confirm
-                    )
+                    try:
+                        bot.edit_message_text(
+                            chat_id=user_id,
+                            message_id=call.message.message_id,
+                            text=f"⚠️ **Вы уверены?**\nВы хотите продать **{item['name']}** за {price:,} ⭐\n\nЭто очень ценный предмет!",
+                            parse_mode='Markdown',
+                            reply_markup=confirm
+                        )
+                    except:
+                        bot.send_message(
+                            user_id,
+                            f"⚠️ **Вы уверены?**\nВы хотите продать **{item['name']}** за {price:,} ⭐\n\nЭто очень ценный предмет!",
+                            parse_mode='Markdown',
+                            reply_markup=confirm
+                        )
                 else:
                     item['count'] -= 1
                     if item['count'] <= 0:
@@ -976,13 +1043,21 @@ def callback_handler(call):
                     bot.answer_callback_query(call.id, f"✅ Продано за {price:,} ⭐!".replace(',', ' '), show_alert=False)
                     
                     keyboard = sell_keyboard(user_id)
-                    bot.edit_message_text(
-                        chat_id=user_id,
-                        message_id=call.message.message_id,
-                        text="💰 **Выберите предмет для продажи:**",
-                        parse_mode='Markdown',
-                        reply_markup=keyboard
-                    )
+                    try:
+                        bot.edit_message_text(
+                            chat_id=user_id,
+                            message_id=call.message.message_id,
+                            text="💰 **Выберите предмет для продажи:**",
+                            parse_mode='Markdown',
+                            reply_markup=keyboard
+                        )
+                    except:
+                        bot.send_message(
+                            user_id,
+                            "💰 **Выберите предмет для продажи:**",
+                            parse_mode='Markdown',
+                            reply_markup=keyboard
+                        )
             else:
                 bot.answer_callback_query(call.id, "❌ Этого предмета больше нет!", show_alert=True)
         
@@ -1002,57 +1077,95 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id, f"✅ Продано за {price:,} ⭐!".replace(',', ' '), show_alert=False)
                 
                 keyboard = sell_keyboard(user_id)
-                bot.edit_message_text(
-                    chat_id=user_id,
-                    message_id=call.message.message_id,
-                    text="💰 **Выберите предмет для продажи:**",
-                    parse_mode='Markdown',
-                    reply_markup=keyboard
-                )
+                try:
+                    bot.edit_message_text(
+                        chat_id=user_id,
+                        message_id=call.message.message_id,
+                        text="💰 **Выберите предмет для продажи:**",
+                        parse_mode='Markdown',
+                        reply_markup=keyboard
+                    )
+                except:
+                    bot.send_message(
+                        user_id,
+                        "💰 **Выберите предмет для продажи:**",
+                        parse_mode='Markdown',
+                        reply_markup=keyboard
+                    )
         
         # --- ЛИДЕРЫ ---
         elif call.data == "leaderboard":
             users = get_all_users_data()
             text = "🏆 **Топ игроков по звездам:**\n\n"
             if users:
-                for i, (user_id, stars, username) in enumerate(users[:10], 1):
-                    name = username or f"Игрок {user_id}"
+                for i, (user_id, stars, display_name) in enumerate(users[:10], 1):
                     medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-                    text += f"{medal} {name} - {stars:,} ⭐\n"
+                    stars_formatted = f"{stars:,}".replace(',', ' ')
+                    text += f"{medal} {display_name} - {stars_formatted} ⭐\n"
             else:
-                text += "Нет игроков"
+                text += "❌ Нет игроков в таблице лидеров"
             
-            bot.edit_message_text(
-                chat_id=user_id,
-                message_id=call.message.message_id,
-                text=text,
-                parse_mode='Markdown',
-                reply_markup=types.InlineKeyboardMarkup().add(
-                    types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+            text += f"\n🔄 Обновлено: {datetime.now().strftime('%H:%M:%S')}"
+            
+            try:
+                bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=call.message.message_id,
+                    text=text,
+                    parse_mode='Markdown',
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("🔄 Обновить", callback_data="leaderboard"),
+                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                    )
                 )
-            )
+            except:
+                bot.send_message(
+                    user_id,
+                    text,
+                    parse_mode='Markdown',
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("🔄 Обновить", callback_data="leaderboard"),
+                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                    )
+                )
         
         # --- ПРОМОКОД ---
         elif call.data == "promocode":
-            bot.edit_message_text(
-                chat_id=user_id,
-                message_id=call.message.message_id,
-                text="🎫 **Введите промокод:**\nНапишите его в чат.",
-                parse_mode='Markdown',
-                reply_markup=types.InlineKeyboardMarkup().add(
-                    types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+            try:
+                bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=call.message.message_id,
+                    text="🎫 **Введите промокод:**\nНапишите его в чат.",
+                    parse_mode='Markdown',
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                    )
                 )
-            )
+            except:
+                bot.send_message(
+                    user_id,
+                    "🎫 **Введите промокод:**\nНапишите его в чат.",
+                    parse_mode='Markdown',
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                    )
+                )
             bot.register_next_step_handler(call.message, process_promocode)
         
         # --- НАЗАД ---
         elif call.data == "back":
-            bot.delete_message(user_id, call.message.message_id)
+            try:
+                bot.delete_message(user_id, call.message.message_id)
+            except:
+                pass
             show_main_menu(user_id)
         
         # --- АДМИН ПАНЕЛЬ ---
         elif call.data == "admin_back":
-            bot.delete_message(user_id, call.message.message_id)
+            try:
+                bot.delete_message(user_id, call.message.message_id)
+            except:
+                pass
             admin_panel(call.message)
         
         elif call.data == "admin_promocodes":
@@ -1077,37 +1190,61 @@ def callback_handler(call):
                     btn = types.InlineKeyboardButton(f"🗑 Удалить {code}", callback_data=f"admin_delete_promo_{code}")
                     keyboard.add(btn)
             
-            bot.edit_message_text(
-                chat_id=user_id,
-                message_id=call.message.message_id,
-                text=text,
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
+            try:
+                bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=call.message.message_id,
+                    text=text,
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+            except:
+                bot.send_message(
+                    user_id,
+                    text,
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
         
         elif call.data == "admin_create_promo":
-            bot.edit_message_text(
-                chat_id=user_id,
-                message_id=call.message.message_id,
-                text="📝 **Создание промокода**\n\n"
-                     "Введите данные в формате:\n"
-                     "`название_кода тип_награды параметр количество_использований`\n\n"
-                     "**Типы:**\n"
-                     "• `stars` - звезды (параметр: количество)\n"
-                     "• `item` - предмет (параметр: ID предмета)\n\n"
-                     "**Доступные ID предметов:**\n"
-                     "`free_1-5`, `premium_1-5`, `legendary_1-5`,\n"
-                     "`halloween_1-5`, `newyear_1-5`, `mythical_1-5`,\n"
-                     "`elite_1-5`, `cosmic_1-5`, `pepe_1-5`\n\n"
-                     "**Примеры:**\n"
-                     "`WELCOME stars 50 10` - 50 звезд, 10 использований\n"
-                     "`GIFT item premium_5 5` - Мега-подарок, 5 использований\n"
-                     "`PEPE item pepe_5 1` - Легендарный Пепе, 1 использование",
-                parse_mode='Markdown',
-                reply_markup=types.InlineKeyboardMarkup().add(
-                    types.InlineKeyboardButton("🔙 Назад", callback_data="admin_promocodes")
+            text = """📝 **Создание промокода**
+
+Введите данные в формате:
+`название_кода тип_награды параметр количество_использований`
+
+**Типы:**
+• `stars` - звезды (параметр: количество)
+• `item` - предмет (параметр: ID предмета)
+
+**Доступные ID предметов:**
+`free_1-5`, `premium_1-5`, `legendary_1-5`,
+`halloween_1-5`, `newyear_1-5`, `mythical_1-5`,
+`elite_1-5`, `cosmic_1-5`, `pepe_1-5`
+
+**Примеры:**
+`WELCOME stars 50 10` - 50 звезд, 10 использований
+`GIFT item premium_5 5` - Мега-подарок, 5 использований
+`PEPE item pepe_5 1` - Легендарный Пепе, 1 использование"""
+            
+            try:
+                bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=call.message.message_id,
+                    text=text,
+                    parse_mode='Markdown',
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("🔙 Назад", callback_data="admin_promocodes")
+                    )
                 )
-            )
+            except:
+                bot.send_message(
+                    user_id,
+                    text,
+                    parse_mode='Markdown',
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("🔙 Назад", callback_data="admin_promocodes")
+                    )
+                )
             bot.register_next_step_handler(call.message, process_create_promo)
         
         elif call.data.startswith("admin_delete_promo_"):
@@ -1136,35 +1273,61 @@ def callback_handler(call):
                     btn = types.InlineKeyboardButton(f"🗑 Удалить {code}", callback_data=f"admin_delete_promo_{code}")
                     keyboard.add(btn)
             
-            bot.edit_message_text(
-                chat_id=user_id,
-                message_id=call.message.message_id,
-                text=text,
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
+            try:
+                bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=call.message.message_id,
+                    text=text,
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+            except:
+                bot.send_message(
+                    user_id,
+                    text,
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
         
         elif call.data == "admin_broadcast":
-            bot.edit_message_text(
-                chat_id=user_id,
-                message_id=call.message.message_id,
-                text="📢 **Рассылка**\nВведите текст для рассылки всем пользователям:",
-                parse_mode='Markdown',
-                reply_markup=types.InlineKeyboardMarkup().add(
-                    types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
+            try:
+                bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=call.message.message_id,
+                    text="📢 **Рассылка**\nВведите текст для рассылки всем пользователям:",
+                    parse_mode='Markdown',
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
+                    )
                 )
-            )
+            except:
+                bot.send_message(
+                    user_id,
+                    "📢 **Рассылка**\nВведите текст для рассылки всем пользователям:",
+                    parse_mode='Markdown',
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
+                    )
+                )
             bot.register_next_step_handler(call.message, process_broadcast)
         
         elif call.data == "admin_cases":
             keyboard = admin_cases_keyboard()
-            bot.edit_message_text(
-                chat_id=user_id,
-                message_id=call.message.message_id,
-                text="🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
+            try:
+                bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=call.message.message_id,
+                    text="🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+            except:
+                bot.send_message(
+                    user_id,
+                    "🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
         
         elif call.data.startswith("admin_toggle_case_"):
             case_id = call.data.split("_")[3]
@@ -1175,13 +1338,21 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id, f"✅ Кейс {status_text}!", show_alert=False)
                 
                 keyboard = admin_cases_keyboard()
-                bot.edit_message_text(
-                    chat_id=user_id,
-                    message_id=call.message.message_id,
-                    text="🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
-                    parse_mode='Markdown',
-                    reply_markup=keyboard
-                )
+                try:
+                    bot.edit_message_text(
+                        chat_id=user_id,
+                        message_id=call.message.message_id,
+                        text="🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
+                        parse_mode='Markdown',
+                        reply_markup=keyboard
+                    )
+                except:
+                    bot.send_message(
+                        user_id,
+                        "🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
+                        parse_mode='Markdown',
+                        reply_markup=keyboard
+                    )
             else:
                 bot.answer_callback_query(call.id, "❌ Ошибка при переключении кейса!", show_alert=True)
     
