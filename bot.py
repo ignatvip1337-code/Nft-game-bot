@@ -213,33 +213,34 @@ def init_db():
                 )
             ''')
             
-            # Проверяем и добавляем кейсы
-            cur.execute('SELECT COUNT(*) FROM cases')
-            count = cur.fetchone()[0]
+            # Все кейсы
+            all_cases = [
+                ('free', '🗑️ Кейс Бомжа', 1, 0, 0, '🗑️'),
+                ('premium', '💎 Премиум Кейс', 1, 100, 0, '💎'),
+                ('legendary', '⚡ Легендарный Кейс', 1, 500, 0, '⚡'),
+                ('halloween', '🎃 Хеллоуинский Кейс', 1, 2500, 1, '🎃'),
+                ('newyear', '🎄 Новогодний Кейс', 1, 5000, 1, '🎄'),
+                ('mythical', '💜 Мифический Кейс', 1, 1000, 0, '💜'),
+                ('elite', '❤️ Элитный Кейс', 1, 5000, 0, '❤️'),
+                ('cosmic', '🌌 Космический Кейс', 1, 10000, 0, '🌌'),
+                ('pepe', '🐸 PePe праздник🔥', 1, 100000, 0, '🐸')
+            ]
             
-            if count == 0:
-                default_cases = [
-                    ('free', '🗑️ Кейс Бомжа', 1, 0, 0, '🗑️'),
-                    ('premium', '💎 Премиум Кейс', 1, 100, 0, '💎'),
-                    ('legendary', '⚡ Легендарный Кейс', 1, 500, 0, '⚡'),
-                    ('halloween', '🎃 Хеллоуинский Кейс', 1, 2500, 1, '🎃'),
-                    ('newyear', '🎄 Новогодний Кейс', 1, 5000, 1, '🎄'),
-                    ('mythical', '💜 Мифический Кейс', 1, 1000, 0, '💜'),
-                    ('elite', '❤️ Элитный Кейс', 1, 5000, 0, '❤️'),
-                    ('cosmic', '🌌 Космический Кейс', 1, 10000, 0, '🌌'),
-                    ('pepe', '🐸 PePe праздник🔥', 1, 100000, 0, '🐸')
-                ]
-                
-                for case in default_cases:
-                    cur.execute('''
-                        INSERT INTO cases (case_id, name, enabled, price, is_temporary, emoji) 
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    ''', case)
-                logger.info("✅ Добавлены кейсы по умолчанию")
+            # Добавляем или обновляем кейсы
+            for case in all_cases:
+                cur.execute('''
+                    INSERT INTO cases (case_id, name, enabled, price, is_temporary, emoji) 
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (case_id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    price = EXCLUDED.price,
+                    is_temporary = EXCLUDED.is_temporary,
+                    emoji = EXCLUDED.emoji
+                ''', case)
             
             conn.commit()
             cur.close()
-            logger.info("✅ База данных инициализирована")
+            logger.info("✅ База данных инициализирована (все кейсы добавлены/обновлены)")
             return True
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации базы: {e}")
@@ -399,57 +400,59 @@ def open_case(case_type):
     
     return '1', 'Ошибка'
 
-# ================= ФУНКЦИИ РАБОТЫ С ПРОМОКОДАМИ =================
+# ================= ФУНКЦИИ РАБОТЫ С ПРОМОКОДАМИ (ИСПРАВЛЕННЫЕ) =================
 def validate_item_id(item_id):
     """
-    Проверка существования предмета.
-    Принимает формат: case_type_item_id (например premium_5)
-    Возвращает (case_type, item_id) или (None, None) если не найден
+    Проверка существования предмета в формате: case_type_itemId
+    Например: premium_5, free_3, pepe_1
     """
-    try:
-        # Разделяем строку по подчеркиванию
-        parts = item_id.split('_')
-        if len(parts) != 2:
-            return None, None
-        
-        case_type = parts[0]
-        item_num = parts[1]
-        
-        # Проверяем существует ли такой кейс
-        if case_type not in ITEMS:
-            return None, None
-        
-        # Проверяем существует ли такой предмет в кейсе
-        if item_num not in ITEMS[case_type]:
-            return None, None
-        
-        return case_type, item_num
-    except Exception as e:
-        logger.error(f"❌ Ошибка в validate_item_id: {e}")
+    if not item_id or '_' not in item_id:
+        return None
+    
+    parts = item_id.split('_')
+    if len(parts) != 2:
+        return None
+    
+    case_type, item_num = parts
+    
+    # Проверяем существует ли такой тип кейса
+    if case_type not in ITEMS:
+        return None
+    
+    # Проверяем существует ли такой предмет в кейсе
+    if item_num not in ITEMS[case_type]:
+        return None
+    
+    return case_type
+
+def parse_item_id(item_id):
+    """
+    Парсит строку вида premium_5 и возвращает (case_type, item_num)
+    """
+    if not item_id or '_' not in item_id:
         return None, None
+    
+    parts = item_id.split('_')
+    if len(parts) != 2:
+        return None, None
+    
+    return parts[0], parts[1]
 
 def create_promocode(code, type, item_id=None, stars=0, uses=1):
     """
     Создание промокода
     type: 'stars' или 'item'
-    item_id: для type='item' - формат case_type_item_id (например premium_5)
+    для item: item_id в формате premium_5, free_3 и т.д.
     """
     try:
-        # Проверяем тип
-        if type not in ['stars', 'item']:
-            return False, "❌ Неверный тип промокода. Используйте 'stars' или 'item'"
-        
-        # Если это промокод на предмет - проверяем существование
-        if type == 'item':
-            if not item_id:
-                return False, "❌ Не указан ID предмета"
-            
-            case_type, item_num = validate_item_id(item_id)
-            if not case_type:
-                return False, f"❌ Предмет '{item_id}' не найден!\nИспользуйте формат: кейс_номер (например premium_5, pepe_1)"
-        
         with db.get_connection() as conn:
             cur = conn.cursor()
+            
+            # Проверяем существование предмета если это item
+            if type == 'item' and item_id:
+                case_type = validate_item_id(item_id)
+                if not case_type:
+                    return False, "❌ Предмет не найден. Используйте формат: case_type_number (например: premium_5, free_3, pepe_1)"
             
             cur.execute('''
                 INSERT INTO promocodes (code, type, item_id, stars, uses) 
@@ -458,18 +461,17 @@ def create_promocode(code, type, item_id=None, stars=0, uses=1):
             conn.commit()
             cur.close()
             
-            # Формируем понятное сообщение
+            # Формируем сообщение об успехе
             if type == 'stars':
-                return True, f"✅ Промокод создан!\n🔑 Код: {code}\n⭐ Награда: {stars:,} звезд\n👥 Использований: {uses}"
+                return True, f"✅ Промокод создан!\n🔑 Код: `{code}`\n⭐ Тип: звезды\n💰 Количество: {stars:,}\n👥 Использований: {uses}"
             else:
-                # Находим название предмета для красивого вывода
-                case_type, item_num = validate_item_id(item_id)
-                if case_type and item_num:
+                # Получаем название предмета для красивого вывода
+                case_type, item_num = parse_item_id(item_id)
+                if case_type and item_num in ITEMS[case_type]:
                     item_name = ITEMS[case_type][item_num]
-                    return True, f"✅ Промокод создан!\n🔑 Код: {code}\n🎁 Предмет: {item_name}\n👥 Использований: {uses}"
+                    return True, f"✅ Промокод создан!\n🔑 Код: `{code}`\n🎁 Тип: предмет\n📦 Предмет: {item_name}\n👥 Использований: {uses}"
                 else:
-                    return True, f"✅ Промокод создан!\n🔑 Код: {code}\n🎁 Предмет: {item_id}\n👥 Использований: {uses}"
-                
+                    return True, f"✅ Промокод создан!\n🔑 Код: `{code}`\n🎁 Тип: предмет\n📦 ID: {item_id}\n👥 Использований: {uses}"
     except psycopg2.IntegrityError:
         return False, "❌ Промокод с таким названием уже существует"
     except Exception as e:
@@ -501,9 +503,6 @@ def get_all_promocodes():
         return []
 
 def use_promocode(code, user_id):
-    """
-    Активация промокода пользователем
-    """
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -513,7 +512,7 @@ def use_promocode(code, user_id):
             if not result:
                 return None, "❌ Промокод не найден"
             
-            promo_type, item_id, stars, uses, used_by_json = result
+            type, item_id, stars, uses, used_by_json = result
             used_by = json.loads(used_by_json) if used_by_json else []
             user_str = str(user_id)
             
@@ -531,8 +530,7 @@ def use_promocode(code, user_id):
             # Получаем данные пользователя
             user_data = get_user(user_id)
             
-            if promo_type == 'stars':
-                # Выдача звезд
+            if type == 'stars':
                 user_data['stars'] += stars
                 update_user(user_id, user_data['stars'], user_data['inventory'])
                 used_by.append(user_str)
@@ -549,12 +547,16 @@ def use_promocode(code, user_id):
                 cur.close()
                 return 'stars', f"⭐ Вы получили {stars:,} звезд!"
             
-            elif promo_type == 'item':
-                # Выдача предмета
+            elif type == 'item':
                 # Проверяем существование предмета
-                case_type, item_num = validate_item_id(item_id)
+                case_type = validate_item_id(item_id)
                 if not case_type:
-                    return None, f"❌ Ошибка: предмет '{item_id}' не найден в системе"
+                    return None, f"❌ Предмет {item_id} не найден в системе"
+                
+                # Парсим ID предмета
+                _, item_num = parse_item_id(item_id)
+                if not item_num or item_num not in ITEMS[case_type]:
+                    return None, f"❌ Предмет {item_id} не найден"
                 
                 item_name = ITEMS[case_type][item_num]
                 inventory = user_data['inventory']
@@ -563,13 +565,8 @@ def use_promocode(code, user_id):
                 if item_id in inventory:
                     inventory[item_id]['count'] += 1
                 else:
-                    inventory[item_id] = {
-                        'name': item_name,
-                        'count': 1,
-                        'type': case_type
-                    }
+                    inventory[item_id] = {'name': item_name, 'count': 1, 'type': case_type}
                 
-                # Сохраняем инвентарь
                 update_user(user_id, user_data['stars'], inventory)
                 used_by.append(user_str)
                 
@@ -587,11 +584,10 @@ def use_promocode(code, user_id):
             
             cur.close()
             return None, "❌ Неизвестный тип промокода"
-            
     except Exception as e:
         logger.error(f"❌ Ошибка в use_promocode: {e}")
-        return None, f"❌ Ошибка при активации промокода: {str(e)}"
-        
+        return None, f"❌ Ошибка: {str(e)}"
+
 # ================= АНИМАЦИЯ =================
 def animate_case(call, case_type):
     try:
@@ -1218,7 +1214,6 @@ def process_promocode(message):
         show_main_menu(message.chat.id)
 
 def process_create_promo(message):
-    """Обработчик создания промокода админом"""
     try:
         user_id = message.chat.id
         if user_id != ADMIN_ID:
@@ -1226,87 +1221,24 @@ def process_create_promo(message):
         
         parts = message.text.strip().split()
         if len(parts) != 4:
-            bot.send_message(
-                user_id, 
-                "❌ **Неверный формат!**\n\n"
-                "Используйте:\n"
-                "`название_кода тип_награды параметр количество_использований`\n\n"
-                "**Типы:**\n"
-                "• `stars` - звезды (параметр: количество)\n"
-                "• `item` - предмет (параметр: ID предмета)\n\n"
-                "**Доступные ID предметов:**\n"
-                "`free_1` - `free_5`\n"
-                "`premium_1` - `premium_5`\n"
-                "`legendary_1` - `legendary_5`\n"
-                "`halloween_1` - `halloween_5`\n"
-                "`newyear_1` - `newyear_5`\n"
-                "`mythical_1` - `mythical_5`\n"
-                "`elite_1` - `elite_5`\n"
-                "`cosmic_1` - `cosmic_5`\n"
-                "`pepe_1` - `pepe_5`\n\n"
-                "**Примеры:**\n"
-                "`WELCOME stars 50 10` - 50 звезд, 10 использований\n"
-                "`GIFT item premium_5 5` - Мега-подарок, 5 использований\n"
-                "`PEPE item pepe_5 1` - Легендарный Пепе, 1 использование",
-                parse_mode='Markdown'
-            )
+            bot.send_message(user_id, "❌ Неверный формат! Используйте: `название тип параметр использование`", parse_mode='Markdown')
             admin_panel(message)
             return
         
-        code, promo_type, param, uses = parts
+        code, type, param, uses = parts
         uses = int(uses)
         
-        if promo_type == 'stars':
+        if type == 'stars':
             stars = int(param)
-            success, msg = create_promocode(code, promo_type, None, stars, uses)
-            bot.send_message(user_id, msg, parse_mode='Markdown')
-            
-        elif promo_type == 'item':
-            # Проверяем формат предмета
-            case_type, item_num = validate_item_id(param)
-            if not case_type:
-                bot.send_message(
-                    user_id,
-                    f"❌ **Ошибка!**\n\n"
-                    f"Предмет '{param}' не найден!\n\n"
-                    "**Правильный формат:** `кейс_номер`\n"
-                    "**Примеры:** `premium_5`, `pepe_1`, `legendary_3`\n\n"
-                    "**Доступные кейсы:**\n"
-                    "• free (1-5)\n"
-                    "• premium (1-5)\n"
-                    "• legendary (1-5)\n"
-                    "• halloween (1-5)\n"
-                    "• newyear (1-5)\n"
-                    "• mythical (1-5)\n"
-                    "• elite (1-5)\n"
-                    "• cosmic (1-5)\n"
-                    "• pepe (1-5)",
-                    parse_mode='Markdown'
-                )
-                admin_panel(message)
-                return
-            
-            # Создаем промокод
-            success, msg = create_promocode(code, promo_type, param, 0, uses)
-            bot.send_message(user_id, msg, parse_mode='Markdown')
-            
+            success, msg = create_promocode(code, type, None, stars, uses)
+            bot.send_message(user_id, msg)
+        elif type == 'item':
+            success, msg = create_promocode(code, type, param, 0, uses)
+            bot.send_message(user_id, msg)
         else:
-            bot.send_message(
-                user_id,
-                f"❌ **Ошибка!**\n\n"
-                f"Неизвестный тип: '{promo_type}'\n"
-                "Используйте `stars` или `item`",
-                parse_mode='Markdown'
-            )
-            
+            bot.send_message(user_id, "❌ Неизвестный тип! Используйте `stars` или `item`")
     except ValueError:
-        bot.send_message(
-            user_id,
-            "❌ **Ошибка!**\n\n"
-            "Количество использований должно быть числом!\n"
-            "Пример: `GIFT item premium_5 5` - где 5 это количество использований",
-            parse_mode='Markdown'
-        )
+        bot.send_message(user_id, "❌ Неверный формат! Количество использования должно быть числом")
     except Exception as e:
         bot.send_message(user_id, f"❌ Ошибка: {str(e)}")
     
