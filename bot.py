@@ -109,7 +109,7 @@ CHANCES = {
     'pepe': {'1': 30, '2': 25, '3': 20, '4': 15, '5': 10}
 }
 
-PEPE_LEGENDARY_CHANCE = 1  # 1% шанс на легендарного пепе
+PEPE_LEGENDARY_CHANCE = 1
 
 # ================= ЦЕНЫ ПРОДАЖИ =================
 PRICES = {
@@ -180,7 +180,6 @@ def init_db():
         with db.get_connection() as conn:
             cur = conn.cursor()
             
-            # Таблица пользователей
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
@@ -190,7 +189,6 @@ def init_db():
                 )
             ''')
             
-            # Таблица промокодов
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS promocodes (
                     code TEXT PRIMARY KEY,
@@ -202,7 +200,6 @@ def init_db():
                 )
             ''')
             
-            # Таблица кейсов
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS cases (
                     case_id TEXT PRIMARY KEY,
@@ -214,7 +211,6 @@ def init_db():
                 )
             ''')
             
-            # Все кейсы
             all_cases = [
                 ('free', '🗑️ Кейс Бомжа', 1, 0, 0, '🗑️'),
                 ('premium', '💎 Премиум Кейс', 1, 100, 0, '💎'),
@@ -227,7 +223,6 @@ def init_db():
                 ('pepe', '🐸 PePe праздник🔥', 1, 100000, 0, '🐸')
             ]
             
-            # Добавляем или обновляем кейсы
             for case in all_cases:
                 cur.execute('''
                     INSERT INTO cases (case_id, name, enabled, price, is_temporary, emoji) 
@@ -241,7 +236,7 @@ def init_db():
             
             conn.commit()
             cur.close()
-            logger.info("✅ База данных инициализирована (все кейсы добавлены/обновлены)")
+            logger.info("✅ База данных инициализирована")
             return True
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации базы: {e}")
@@ -322,11 +317,21 @@ def get_all_users_data():
             users = cur.fetchall()
             cur.close()
             
-            # Форматируем данные для вывода
             formatted_users = []
             for user_id, stars, username in users:
-                display_name = username if username and username != '' else f"👤 {user_id}"
-                formatted_users.append((user_id, stars, display_name))
+                # Пытаемся получить username через API если его нет в базе
+                if not username or username == '':
+                    try:
+                        chat = bot.get_chat(user_id)
+                        if chat.username:
+                            username = chat.username
+                            update_username(user_id, username)
+                        else:
+                            username = f"ID:{user_id}"
+                    except:
+                        username = f"ID:{user_id}"
+                
+                formatted_users.append((user_id, stars, username))
             
             return formatted_users
     except Exception as e:
@@ -389,29 +394,30 @@ def toggle_case(case_id):
         return None
 
 def get_item_price(item_id, case_type):
-    """Получение цены предмета по его ID и типу кейса"""
-    # Если case_type не передан, пытаемся определить по item_id
-    if not case_type and '_' in item_id:
-        parts = item_id.split('_')
-        if len(parts) == 2:
-            case_type = parts[0]
-    
-    if case_type and case_type in PRICES:
-        # Если item_id содержит подчеркивание, извлекаем номер
+    """Получение цены предмета"""
+    try:
+        # Если передан полный ID (например premium_5)
         if '_' in item_id:
             parts = item_id.split('_')
-            if len(parts) == 2 and parts[1] in PRICES[case_type]:
-                return PRICES[case_type][parts[1]]
-        # Иначе ищем как есть
-        elif item_id in PRICES[case_type]:
-            return PRICES[case_type][item_id]
-    
-    return PRICES.get(case_type, {}).get(item_id, 1)
+            if len(parts) == 2:
+                case_type = parts[0]
+                item_num = parts[1]
+                if case_type in PRICES and item_num in PRICES[case_type]:
+                    return PRICES[case_type][item_num]
+        
+        # Если передан отдельно тип и номер
+        if case_type and case_type in PRICES:
+            if item_id in PRICES[case_type]:
+                return PRICES[case_type][item_id]
+        
+        return 1
+    except Exception as e:
+        logger.error(f"❌ Ошибка в get_item_price: {e}")
+        return 1
 
 def open_case(case_type):
-    """Открытие кейса с проверкой шансов"""
+    """Открытие кейса"""
     if case_type == 'pepe':
-        # 1% шанс на легендарного пепе
         if random.randint(1, 100) <= PEPE_LEGENDARY_CHANCE:
             return '5', ITEMS['pepe']['5']
         
@@ -433,10 +439,7 @@ def open_case(case_type):
 
 # ================= ФУНКЦИИ РАБОТЫ С ПРОМОКОДАМИ =================
 def validate_item_id(item_id):
-    """
-    Проверка существования предмета в формате: case_type_itemId
-    Например: premium_5, free_3, pepe_1
-    """
+    """Проверка существования предмета в формате: case_type_number"""
     if not item_id or '_' not in item_id:
         return None
     
@@ -446,20 +449,16 @@ def validate_item_id(item_id):
     
     case_type, item_num = parts
     
-    # Проверяем существует ли такой тип кейса
     if case_type not in ITEMS:
         return None
     
-    # Проверяем существует ли такой предмет в кейсе
     if item_num not in ITEMS[case_type]:
         return None
     
     return case_type
 
 def parse_item_id(item_id):
-    """
-    Парсит строку вида premium_5 и возвращает (case_type, item_num)
-    """
+    """Парсит строку вида premium_5 и возвращает (case_type, item_num)"""
     if not item_id or '_' not in item_id:
         return None, None
     
@@ -470,20 +469,14 @@ def parse_item_id(item_id):
     return parts[0], parts[1]
 
 def create_promocode(code, type, item_id=None, stars=0, uses=1):
-    """
-    Создание промокода
-    type: 'stars' или 'item'
-    для item: item_id в формате premium_5, free_3 и т.д.
-    """
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
             
-            # Проверяем существование предмета если это item
             if type == 'item' and item_id:
                 case_type = validate_item_id(item_id)
                 if not case_type:
-                    return False, "❌ Предмет не найден. Используйте формат: case_type_number (например: premium_5, free_3, pepe_1)"
+                    return False, "❌ Предмет не найден. Используйте формат: case_type_number (например: premium_5, free_3)"
             
             cur.execute('''
                 INSERT INTO promocodes (code, type, item_id, stars, uses) 
@@ -492,17 +485,15 @@ def create_promocode(code, type, item_id=None, stars=0, uses=1):
             conn.commit()
             cur.close()
             
-            # Формируем сообщение об успехе
             if type == 'stars':
-                return True, f"✅ Промокод создан!\n🔑 Код: `{code}`\n⭐ Тип: звезды\n💰 Количество: {stars:,}\n👥 Использований: {uses}"
+                return True, f"✅ Промокод создан!\n🔑 Код: `{code}`\n⭐ Звезды: {stars:,}\n👥 Использований: {uses}"
             else:
-                # Получаем название предмета для красивого вывода
                 case_type, item_num = parse_item_id(item_id)
                 if case_type and item_num in ITEMS[case_type]:
                     item_name = ITEMS[case_type][item_num]
-                    return True, f"✅ Промокод создан!\n🔑 Код: `{code}`\n🎁 Тип: предмет\n📦 Предмет: {item_name}\n👥 Использований: {uses}"
+                    return True, f"✅ Промокод создан!\n🔑 Код: `{code}`\n🎁 Предмет: {item_name}\n👥 Использований: {uses}"
                 else:
-                    return True, f"✅ Промокод создан!\n🔑 Код: `{code}`\n🎁 Тип: предмет\n📦 ID: {item_id}\n👥 Использований: {uses}"
+                    return True, f"✅ Промокод создан!\n🔑 Код: `{code}`\n🎁 ID: {item_id}\n👥 Использований: {uses}"
     except psycopg2.IntegrityError:
         return False, "❌ Промокод с таким названием уже существует"
     except Exception as e:
@@ -547,17 +538,14 @@ def use_promocode(code, user_id):
             used_by = json.loads(used_by_json) if used_by_json else []
             user_str = str(user_id)
             
-            # Проверяем использовал ли уже
             if user_str in used_by:
                 return None, "❌ Вы уже использовали этот промокод"
             
-            # Проверяем остаток использований
             if len(used_by) >= uses:
                 cur.execute('DELETE FROM promocodes WHERE code = %s', (code,))
                 conn.commit()
                 return None, "❌ Промокод уже использован максимальное количество раз"
             
-            # Получаем данные пользователя
             user_data = get_user(user_id)
             
             if type == 'stars':
@@ -576,12 +564,10 @@ def use_promocode(code, user_id):
                 return 'stars', f"⭐ Вы получили {stars:,} звезд!"
             
             elif type == 'item':
-                # Проверяем существование предмета
                 case_type = validate_item_id(item_id)
                 if not case_type:
-                    return None, f"❌ Предмет {item_id} не найден в системе"
+                    return None, f"❌ Предмет {item_id} не найден"
                 
-                # Парсим ID предмета
                 _, item_num = parse_item_id(item_id)
                 if not item_num or item_num not in ITEMS[case_type]:
                     return None, f"❌ Предмет {item_id} не найден"
@@ -589,15 +575,15 @@ def use_promocode(code, user_id):
                 item_name = ITEMS[case_type][item_num]
                 inventory = user_data['inventory']
                 
-                # Сохраняем предмет с правильным type
+                # Сохраняем предмет с правильным типом
                 if item_id in inventory:
                     inventory[item_id]['count'] += 1
-                    inventory[item_id]['type'] = case_type  # Обновляем тип на всякий случай
+                    inventory[item_id]['type'] = case_type
                 else:
                     inventory[item_id] = {
                         'name': item_name,
                         'count': 1,
-                        'type': case_type  # Критически важно для продажи!
+                        'type': case_type
                     }
                 
                 update_user(user_id, user_data['stars'], inventory)
@@ -651,25 +637,28 @@ def animate_case(call, case_type):
                     parse_mode='Markdown'
                 )
             except:
-                pass  # Игнорируем ошибки редактирования
+                pass
         
-        # Открываем кейс
         item_id, item_name = open_case(case_type)
         
-        # Сохраняем в инвентарь с транзакцией
         user_data = get_user(message.chat.id)
         inventory = user_data['inventory']
         
-        if item_id in inventory:
-            inventory[item_id]['count'] += 1
+        # Сохраняем предмет с правильным типом
+        full_item_id = f"{case_type}_{item_id}"
+        if full_item_id in inventory:
+            inventory[full_item_id]['count'] += 1
         else:
-            inventory[item_id] = {'name': item_name, 'count': 1, 'type': case_type}
+            inventory[full_item_id] = {
+                'name': item_name,
+                'count': 1,
+                'type': case_type
+            }
         
         update_user(message.chat.id, user_data['stars'], inventory)
         
         price = get_item_price(item_id, case_type)
         
-        # Определяем редкость
         if price >= 1000000:
             rarity = "🔥🔥🔥 **ЛЕГЕНДАРНО!** 🔥🔥🔥"
         elif price >= 50000:
@@ -700,16 +689,11 @@ def animate_case(call, case_type):
         show_main_menu(message.chat.id)
     except Exception as e:
         logger.error(f"❌ Ошибка в animate_case: {e}")
-        try:
-            bot.send_message(call.message.chat.id, f"❌ Ошибка при открытии кейса: {str(e)}")
-        except:
-            pass
 
 # ================= КЛАВИАТУРЫ =================
 def main_menu_keyboard(user_id):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     
-    # Список кейсов
     case_list = [
         ('free', '🗑️ Кейс Бомжа (Бесплатно)'),
         ('premium', '💎 Премиум Кейс (100 ⭐)'),
@@ -719,7 +703,6 @@ def main_menu_keyboard(user_id):
         ('cosmic', '🌌 Космический Кейс (10 000 ⭐)')
     ]
     
-    # Добавляем временные кейсы
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -733,7 +716,6 @@ def main_menu_keyboard(user_id):
     except Exception as e:
         logger.error(f"❌ Ошибка в main_menu_keyboard: {e}")
     
-    # Добавляем PePe кейс отдельно
     case_list.append(('pepe', '🐸 PePe праздник🔥 (100 000 ⭐)'))
     
     for case_id, label in case_list:
@@ -741,7 +723,6 @@ def main_menu_keyboard(user_id):
             btn = types.InlineKeyboardButton(label, callback_data=f"case_{case_id}")
             keyboard.add(btn)
     
-    # Меню
     btn_profile = types.InlineKeyboardButton("👤 Мой профиль", callback_data="profile")
     btn_sell = types.InlineKeyboardButton("💰 Продать предметы", callback_data="sell")
     btn_leaderboard = types.InlineKeyboardButton("🏆 Лидеры", callback_data="leaderboard")
@@ -784,9 +765,10 @@ def sell_keyboard(user_id):
             return keyboard
         
         for item_id, data in inventory.items():
-            price = get_item_price(item_id, data['type'])
+            # Получаем цену предмета
+            price = get_item_price(item_id, data.get('type', ''))
             
-            # Определяем редкость для отображения
+            # Определяем редкость
             if price >= 1000000:
                 rarity = "💎💎💎"
             elif price >= 50000:
@@ -854,7 +836,6 @@ def start(message):
         user_id = message.chat.id
         logger.info(f"✅ /start от {user_id}")
         
-        # Обновляем username при каждом запуске
         if message.from_user.username:
             update_username(user_id, message.from_user.username)
         
@@ -920,17 +901,22 @@ def callback_handler(call):
                 if user_data['stars'] >= price:
                     user_data['stars'] -= price
                     update_user(user_id, user_data['stars'], user_data['inventory'])
-                    bot.delete_message(user_id, call.message.message_id)
+                    try:
+                        bot.delete_message(user_id, call.message.message_id)
+                    except:
+                        pass
                     threading.Thread(target=animate_case, args=(call, case_id), daemon=True).start()
                 else:
                     bot.answer_callback_query(call.id, f"❌ Недостаточно звезд! Нужно: {price:,} ⭐".replace(',', ' '), show_alert=True)
             else:
-                bot.delete_message(user_id, call.message.message_id)
+                try:
+                    bot.delete_message(user_id, call.message.message_id)
+                except:
+                    pass
                 threading.Thread(target=animate_case, args=(call, case_id), daemon=True).start()
         
         # --- ПРОФИЛЬ ---
         elif call.data == "profile":
-            # Обновляем username при просмотре профиля
             try:
                 if call.message.from_user.username:
                     update_username(user_id, call.message.from_user.username)
@@ -943,7 +929,7 @@ def callback_handler(call):
             
             if user_data['inventory']:
                 for item_id, data in user_data['inventory'].items():
-                    price = get_item_price(item_id, data['type'])
+                    price = get_item_price(item_id, data.get('type', ''))
                     total_value += price * data['count']
                     total_items += data['count']
                     
@@ -961,7 +947,6 @@ def callback_handler(call):
             else:
                 inv_text = "Пусто"
             
-            # Получаем актуальный username
             user_full = get_user(user_id)
             display_name = user_full['username'] or f"ID:{user_id}"
             
@@ -975,16 +960,27 @@ def callback_handler(call):
 **📦 Инвентарь:**
 {inv_text}"""
             
-            bot.edit_message_text(
-                chat_id=user_id,
-                message_id=call.message.message_id,
-                text=text,
-                parse_mode='Markdown',
-                reply_markup=types.InlineKeyboardMarkup().add(
-                    types.InlineKeyboardButton("🔄 Обновить", callback_data="profile"),
-                    types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+            try:
+                bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=call.message.message_id,
+                    text=text,
+                    parse_mode='Markdown',
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("🔄 Обновить", callback_data="profile"),
+                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                    )
                 )
-            )
+            except:
+                bot.send_message(
+                    user_id,
+                    text,
+                    parse_mode='Markdown',
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("🔄 Обновить", callback_data="profile"),
+                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                    )
+                )
         
         # --- ПРОДАЖА ---
         elif call.data == "sell":
@@ -1009,7 +1005,7 @@ def callback_handler(call):
             item_id = call.data.split("_")[1]
             if item_id in user_data['inventory']:
                 item = user_data['inventory'][item_id]
-                price = get_item_price(item_id, item['type'])
+                price = get_item_price(item_id, item.get('type', ''))
                 
                 if price >= 1000000:
                     confirm = types.InlineKeyboardMarkup()
@@ -1033,6 +1029,7 @@ def callback_handler(call):
                             reply_markup=confirm
                         )
                 else:
+                    # Продажа
                     item['count'] -= 1
                     if item['count'] <= 0:
                         del user_data['inventory'][item_id]
@@ -1065,7 +1062,7 @@ def callback_handler(call):
             item_id = call.data.split("_")[2]
             if item_id in user_data['inventory']:
                 item = user_data['inventory'][item_id]
-                price = get_item_price(item_id, item['type'])
+                price = get_item_price(item_id, item.get('type', ''))
                 
                 item['count'] -= 1
                 if item['count'] <= 0:
@@ -1223,8 +1220,7 @@ def callback_handler(call):
 
 **Примеры:**
 `WELCOME stars 50 10` - 50 звезд, 10 использований
-`GIFT item premium_5 5` - Мега-подарок, 5 использований
-`PEPE item pepe_5 1` - Легендарный Пепе, 1 использование"""
+`GIFT item premium_5 5` - Мега-подарок, 5 использований"""
             
             try:
                 bot.edit_message_text(
@@ -1454,16 +1450,6 @@ if __name__ == '__main__':
         logger.info("✅ База данных PostgreSQL готова")
         logger.info(f"👑 Админ ID: {ADMIN_ID}")
         logger.info("🚀 Бот готов к работе!")
-        logger.info("\n📌 Доступные кейсы:")
-        logger.info("   🗑️ Кейс Бомжа - бесплатный")
-        logger.info("   💎 Премиум Кейс - 100 ⭐")
-        logger.info("   💜 Мифический Кейс - 1 000 ⭐")
-        logger.info("   ⚡ Легендарный Кейс - 500 ⭐")
-        logger.info("   ❤️ Элитный Кейс - 5 000 ⭐")
-        logger.info("   🌌 Космический Кейс - 10 000 ⭐")
-        logger.info("   🎃 Хеллоуинский Кейс - 2 500 ⭐")
-        logger.info("   🎄 Новогодний Кейс - 5 000 ⭐")
-        logger.info("   🐸 PePe праздник🔥 - 100 000 ⭐")
         bot.infinity_polling()
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}")
