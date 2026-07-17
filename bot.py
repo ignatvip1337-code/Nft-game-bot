@@ -304,7 +304,6 @@ def get_all_users():
         return []
 
 def get_all_users_data():
-    """Получение данных всех пользователей для таблицы лидеров"""
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -319,7 +318,6 @@ def get_all_users_data():
             
             formatted_users = []
             for user_id, stars, username in users:
-                # Пытаемся получить username через API если его нет в базе
                 if not username or username == '':
                     try:
                         chat = bot.get_chat(user_id)
@@ -393,22 +391,26 @@ def toggle_case(case_id):
         logger.error(f"❌ Ошибка в toggle_case: {e}")
         return None
 
-def get_item_price(item_id, case_type):
-    """Получение цены предмета"""
+def get_item_price(item_id, case_type=None):
     try:
-        # Если передан полный ID (например premium_5)
         if '_' in item_id:
             parts = item_id.split('_')
             if len(parts) == 2:
                 case_type = parts[0]
                 item_num = parts[1]
+                
                 if case_type in PRICES and item_num in PRICES[case_type]:
                     return PRICES[case_type][item_num]
         
-        # Если передан отдельно тип и номер
         if case_type and case_type in PRICES:
             if item_id in PRICES[case_type]:
                 return PRICES[case_type][item_id]
+        
+        for ct, prices in PRICES.items():
+            if item_id in prices:
+                return prices[item_id]
+            if f"{ct}_{item_id}" in prices:
+                return prices[f"{ct}_{item_id}"]
         
         return 1
     except Exception as e:
@@ -416,7 +418,6 @@ def get_item_price(item_id, case_type):
         return 1
 
 def open_case(case_type):
-    """Открытие кейса"""
     if case_type == 'pepe':
         if random.randint(1, 100) <= PEPE_LEGENDARY_CHANCE:
             return '5', ITEMS['pepe']['5']
@@ -439,7 +440,6 @@ def open_case(case_type):
 
 # ================= ФУНКЦИИ РАБОТЫ С ПРОМОКОДАМИ =================
 def validate_item_id(item_id):
-    """Проверка существования предмета в формате: case_type_number"""
     if not item_id or '_' not in item_id:
         return None
     
@@ -458,7 +458,6 @@ def validate_item_id(item_id):
     return case_type
 
 def parse_item_id(item_id):
-    """Парсит строку вида premium_5 и возвращает (case_type, item_num)"""
     if not item_id or '_' not in item_id:
         return None, None
     
@@ -575,7 +574,6 @@ def use_promocode(code, user_id):
                 item_name = ITEMS[case_type][item_num]
                 inventory = user_data['inventory']
                 
-                # Сохраняем предмет с правильным типом
                 if item_id in inventory:
                     inventory[item_id]['count'] += 1
                     inventory[item_id]['type'] = case_type
@@ -604,6 +602,33 @@ def use_promocode(code, user_id):
     except Exception as e:
         logger.error(f"❌ Ошибка в use_promocode: {e}")
         return None, f"❌ Ошибка: {str(e)}"
+
+# ================= ФУНКЦИЯ ПРОДАЖИ =================
+def sell_item(user_id, item_id):
+    try:
+        user_data = get_user(user_id)
+        inventory = user_data['inventory']
+        
+        if item_id not in inventory:
+            return False, "❌ Предмет не найден"
+        
+        item = inventory[item_id]
+        price = get_item_price(item_id, item.get('type', ''))
+        
+        if price <= 0:
+            return False, "❌ Этот предмет нельзя продать"
+        
+        item['count'] -= 1
+        if item['count'] <= 0:
+            del inventory[item_id]
+        
+        user_data['stars'] += price
+        update_user(user_id, user_data['stars'], inventory)
+        
+        return True, f"✅ Продано за {price:,} ⭐!"
+    except Exception as e:
+        logger.error(f"❌ Ошибка в sell_item: {e}")
+        return False, f"❌ Ошибка: {str(e)}"
 
 # ================= АНИМАЦИЯ =================
 def animate_case(call, case_type):
@@ -644,7 +669,6 @@ def animate_case(call, case_type):
         user_data = get_user(message.chat.id)
         inventory = user_data['inventory']
         
-        # Сохраняем предмет с правильным типом
         full_item_id = f"{case_type}_{item_id}"
         if full_item_id in inventory:
             inventory[full_item_id]['count'] += 1
@@ -764,11 +788,15 @@ def sell_keyboard(user_id):
             keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back"))
             return keyboard
         
-        for item_id, data in inventory.items():
-            # Получаем цену предмета
+        sorted_items = sorted(
+            inventory.items(),
+            key=lambda x: get_item_price(x[0], x[1].get('type', '')),
+            reverse=True
+        )
+        
+        for item_id, data in sorted_items:
             price = get_item_price(item_id, data.get('type', ''))
             
-            # Определяем редкость
             if price >= 1000000:
                 rarity = "💎💎💎"
             elif price >= 50000:
@@ -881,13 +909,12 @@ def admin_panel(message):
     except Exception as e:
         logger.error(f"❌ Ошибка в admin_panel: {e}")
 
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
+@bot.callback_query_handler(func=lambda call: call.data.startswith("case_") or call.data == "case")
+def handle_case(call):
     try:
         user_id = call.message.chat.id
         user_data = get_user(user_id)
         
-        # --- КЕЙСЫ ---
         if call.data.startswith("case_"):
             case_id = call.data.split("_")[1]
             
@@ -914,43 +941,49 @@ def callback_handler(call):
                 except:
                     pass
                 threading.Thread(target=animate_case, args=(call, case_id), daemon=True).start()
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_case: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "profile")
+def handle_profile(call):
+    try:
+        user_id = call.message.chat.id
+        user_data = get_user(user_id)
         
-        # --- ПРОФИЛЬ ---
-        elif call.data == "profile":
-            try:
-                if call.message.from_user.username:
-                    update_username(user_id, call.message.from_user.username)
-            except:
-                pass
-            
-            inv_text = ""
-            total_items = 0
-            total_value = 0
-            
-            if user_data['inventory']:
-                for item_id, data in user_data['inventory'].items():
-                    price = get_item_price(item_id, data.get('type', ''))
-                    total_value += price * data['count']
-                    total_items += data['count']
-                    
-                    if price >= 1000000:
-                        rarity = "💎💎💎"
-                    elif price >= 50000:
-                        rarity = "💎✨"
-                    elif price >= 10000:
-                        rarity = "✨⭐"
-                    elif price >= 1000:
-                        rarity = "⭐"
-                    else:
-                        rarity = "📦"
-                    inv_text += f"{rarity} {data['name']} x{data['count']} (+{price:,}⭐)\n"
-            else:
-                inv_text = "Пусто"
-            
-            user_full = get_user(user_id)
-            display_name = user_full['username'] or f"ID:{user_id}"
-            
-            text = f"""👤 **Профиль игрока**
+        try:
+            if call.message.from_user.username:
+                update_username(user_id, call.message.from_user.username)
+        except:
+            pass
+        
+        inv_text = ""
+        total_items = 0
+        total_value = 0
+        
+        if user_data['inventory']:
+            for item_id, data in user_data['inventory'].items():
+                price = get_item_price(item_id, data.get('type', ''))
+                total_value += price * data['count']
+                total_items += data['count']
+                
+                if price >= 1000000:
+                    rarity = "💎💎💎"
+                elif price >= 50000:
+                    rarity = "💎✨"
+                elif price >= 10000:
+                    rarity = "✨⭐"
+                elif price >= 1000:
+                    rarity = "⭐"
+                else:
+                    rarity = "📦"
+                inv_text += f"{rarity} {data['name']} x{data['count']} (+{price:,}⭐)\n"
+        else:
+            inv_text = "Пусто"
+        
+        user_full = get_user(user_id)
+        display_name = user_full['username'] or f"ID:{user_id}"
+        
+        text = f"""👤 **Профиль игрока**
 
 👤 **Имя:** {display_name}
 ⭐ **Звезды:** {user_data['stars']:,}
@@ -959,31 +992,95 @@ def callback_handler(call):
 
 **📦 Инвентарь:**
 {inv_text}"""
-            
+        
+        try:
+            bot.edit_message_text(
+                chat_id=user_id,
+                message_id=call.message.message_id,
+                text=text,
+                parse_mode='Markdown',
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔄 Обновить", callback_data="profile"),
+                    types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                )
+            )
+        except:
+            bot.send_message(
+                user_id,
+                text,
+                parse_mode='Markdown',
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔄 Обновить", callback_data="profile"),
+                    types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                )
+            )
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_profile: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "sell")
+def handle_sell_menu(call):
+    try:
+        user_id = call.message.chat.id
+        keyboard = sell_keyboard(user_id)
+        try:
+            bot.edit_message_text(
+                chat_id=user_id,
+                message_id=call.message.message_id,
+                text="💰 **Выберите предмет для продажи:**",
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+        except:
+            bot.send_message(
+                user_id,
+                "💰 **Выберите предмет для продажи:**",
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_sell_menu: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("sell_"))
+def handle_sell_item(call):
+    try:
+        user_id = call.message.chat.id
+        item_id = call.data.split("_")[1]
+        user_data = get_user(user_id)
+        
+        if item_id not in user_data['inventory']:
+            bot.answer_callback_query(call.id, "❌ Предмет не найден!", show_alert=True)
+            return
+        
+        item = user_data['inventory'][item_id]
+        price = get_item_price(item_id, item.get('type', ''))
+        
+        if price >= 1000000:
+            confirm = types.InlineKeyboardMarkup()
+            confirm.add(
+                types.InlineKeyboardButton("✅ Да, продать", callback_data=f"confirm_sell_{item_id}"),
+                types.InlineKeyboardButton("❌ Нет", callback_data="sell")
+            )
             try:
                 bot.edit_message_text(
                     chat_id=user_id,
                     message_id=call.message.message_id,
-                    text=text,
+                    text=f"⚠️ **Вы уверены?**\nВы хотите продать **{item['name']}** за {price:,} ⭐\n\nЭто очень ценный предмет!",
                     parse_mode='Markdown',
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("🔄 Обновить", callback_data="profile"),
-                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
-                    )
+                    reply_markup=confirm
                 )
             except:
                 bot.send_message(
                     user_id,
-                    text,
+                    f"⚠️ **Вы уверены?**\nВы хотите продать **{item['name']}** за {price:,} ⭐\n\nЭто очень ценный предмет!",
                     parse_mode='Markdown',
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("🔄 Обновить", callback_data="profile"),
-                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
-                    )
+                    reply_markup=confirm
                 )
+            return
         
-        # --- ПРОДАЖА ---
-        elif call.data == "sell":
+        success, msg = sell_item(user_id, item_id)
+        bot.answer_callback_query(call.id, msg, show_alert=False)
+        
+        if success:
             keyboard = sell_keyboard(user_id)
             try:
                 bot.edit_message_text(
@@ -1000,211 +1097,181 @@ def callback_handler(call):
                     parse_mode='Markdown',
                     reply_markup=keyboard
                 )
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_sell_item: {e}")
+        try:
+            bot.answer_callback_query(call.id, f"❌ Ошибка: {str(e)}", show_alert=True)
+        except:
+            pass
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_sell_"))
+def handle_confirm_sell(call):
+    try:
+        user_id = call.message.chat.id
+        item_id = call.data.split("_")[2]
         
-        elif call.data.startswith("sell_"):
-            item_id = call.data.split("_")[1]
-            if item_id in user_data['inventory']:
-                item = user_data['inventory'][item_id]
-                price = get_item_price(item_id, item.get('type', ''))
-                
-                if price >= 1000000:
-                    confirm = types.InlineKeyboardMarkup()
-                    confirm.add(
-                        types.InlineKeyboardButton("✅ Да, продать", callback_data=f"confirm_sell_{item_id}"),
-                        types.InlineKeyboardButton("❌ Нет", callback_data="sell")
-                    )
-                    try:
-                        bot.edit_message_text(
-                            chat_id=user_id,
-                            message_id=call.message.message_id,
-                            text=f"⚠️ **Вы уверены?**\nВы хотите продать **{item['name']}** за {price:,} ⭐\n\nЭто очень ценный предмет!",
-                            parse_mode='Markdown',
-                            reply_markup=confirm
-                        )
-                    except:
-                        bot.send_message(
-                            user_id,
-                            f"⚠️ **Вы уверены?**\nВы хотите продать **{item['name']}** за {price:,} ⭐\n\nЭто очень ценный предмет!",
-                            parse_mode='Markdown',
-                            reply_markup=confirm
-                        )
+        success, msg = sell_item(user_id, item_id)
+        bot.answer_callback_query(call.id, msg, show_alert=False)
+        
+        if success:
+            keyboard = sell_keyboard(user_id)
+            try:
+                bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=call.message.message_id,
+                    text="💰 **Выберите предмет для продажи:**",
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+            except:
+                bot.send_message(
+                    user_id,
+                    "💰 **Выберите предмет для продажи:**",
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_confirm_sell: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "leaderboard")
+def handle_leaderboard(call):
+    try:
+        user_id = call.message.chat.id
+        users = get_all_users_data()
+        text = "🏆 **Топ игроков по звездам:**\n\n"
+        if users:
+            for i, (user_id, stars, display_name) in enumerate(users[:10], 1):
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                stars_formatted = f"{stars:,}".replace(',', ' ')
+                text += f"{medal} {display_name} - {stars_formatted} ⭐\n"
+        else:
+            text += "❌ Нет игроков в таблице лидеров"
+        
+        text += f"\n🔄 Обновлено: {datetime.now().strftime('%H:%M:%S')}"
+        
+        try:
+            bot.edit_message_text(
+                chat_id=user_id,
+                message_id=call.message.message_id,
+                text=text,
+                parse_mode='Markdown',
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔄 Обновить", callback_data="leaderboard"),
+                    types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                )
+            )
+        except:
+            bot.send_message(
+                user_id,
+                text,
+                parse_mode='Markdown',
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔄 Обновить", callback_data="leaderboard"),
+                    types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                )
+            )
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_leaderboard: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "promocode")
+def handle_promocode(call):
+    try:
+        user_id = call.message.chat.id
+        try:
+            bot.edit_message_text(
+                chat_id=user_id,
+                message_id=call.message.message_id,
+                text="🎫 **Введите промокод:**\nНапишите его в чат.",
+                parse_mode='Markdown',
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                )
+            )
+        except:
+            bot.send_message(
+                user_id,
+                "🎫 **Введите промокод:**\nНапишите его в чат.",
+                parse_mode='Markdown',
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔙 Назад", callback_data="back")
+                )
+            )
+        bot.register_next_step_handler(call.message, process_promocode)
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_promocode: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "back")
+def handle_back(call):
+    try:
+        user_id = call.message.chat.id
+        try:
+            bot.delete_message(user_id, call.message.message_id)
+        except:
+            pass
+        show_main_menu(user_id)
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_back: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back")
+def handle_admin_back(call):
+    try:
+        user_id = call.message.chat.id
+        try:
+            bot.delete_message(user_id, call.message.message_id)
+        except:
+            pass
+        admin_panel(call.message)
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_admin_back: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_promocodes")
+def handle_admin_promocodes(call):
+    try:
+        user_id = call.message.chat.id
+        codes = get_all_promocodes()
+        text = "📊 **Список промокодов:**\n\n"
+        if codes:
+            for code, type, item_id, stars, uses in codes:
+                text += f"🔑 Код: `{code}`\n"
+                text += f"📌 Тип: {type}\n"
+                if type == 'stars':
+                    text += f"⭐ Звезды: {stars:,}\n"
                 else:
-                    # Продажа
-                    item['count'] -= 1
-                    if item['count'] <= 0:
-                        del user_data['inventory'][item_id]
-                    
-                    user_data['stars'] += price
-                    update_user(user_id, user_data['stars'], user_data['inventory'])
-                    
-                    bot.answer_callback_query(call.id, f"✅ Продано за {price:,} ⭐!".replace(',', ' '), show_alert=False)
-                    
-                    keyboard = sell_keyboard(user_id)
-                    try:
-                        bot.edit_message_text(
-                            chat_id=user_id,
-                            message_id=call.message.message_id,
-                            text="💰 **Выберите предмет для продажи:**",
-                            parse_mode='Markdown',
-                            reply_markup=keyboard
-                        )
-                    except:
-                        bot.send_message(
-                            user_id,
-                            "💰 **Выберите предмет для продажи:**",
-                            parse_mode='Markdown',
-                            reply_markup=keyboard
-                        )
-            else:
-                bot.answer_callback_query(call.id, "❌ Этого предмета больше нет!", show_alert=True)
+                    text += f"🎁 Предмет: {item_id}\n"
+                text += f"👥 Использований: {uses}\n"
+                text += "➖➖➖➖➖➖➖\n"
+        else:
+            text += "Промокодов нет"
         
-        elif call.data.startswith("confirm_sell_"):
-            item_id = call.data.split("_")[2]
-            if item_id in user_data['inventory']:
-                item = user_data['inventory'][item_id]
-                price = get_item_price(item_id, item.get('type', ''))
-                
-                item['count'] -= 1
-                if item['count'] <= 0:
-                    del user_data['inventory'][item_id]
-                
-                user_data['stars'] += price
-                update_user(user_id, user_data['stars'], user_data['inventory'])
-                
-                bot.answer_callback_query(call.id, f"✅ Продано за {price:,} ⭐!".replace(',', ' '), show_alert=False)
-                
-                keyboard = sell_keyboard(user_id)
-                try:
-                    bot.edit_message_text(
-                        chat_id=user_id,
-                        message_id=call.message.message_id,
-                        text="💰 **Выберите предмет для продажи:**",
-                        parse_mode='Markdown',
-                        reply_markup=keyboard
-                    )
-                except:
-                    bot.send_message(
-                        user_id,
-                        "💰 **Выберите предмет для продажи:**",
-                        parse_mode='Markdown',
-                        reply_markup=keyboard
-                    )
+        keyboard = admin_menu_keyboard()
+        if codes:
+            for code, _, _, _, _ in codes:
+                btn = types.InlineKeyboardButton(f"🗑 Удалить {code}", callback_data=f"admin_delete_promo_{code}")
+                keyboard.add(btn)
         
-        # --- ЛИДЕРЫ ---
-        elif call.data == "leaderboard":
-            users = get_all_users_data()
-            text = "🏆 **Топ игроков по звездам:**\n\n"
-            if users:
-                for i, (user_id, stars, display_name) in enumerate(users[:10], 1):
-                    medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-                    stars_formatted = f"{stars:,}".replace(',', ' ')
-                    text += f"{medal} {display_name} - {stars_formatted} ⭐\n"
-            else:
-                text += "❌ Нет игроков в таблице лидеров"
-            
-            text += f"\n🔄 Обновлено: {datetime.now().strftime('%H:%M:%S')}"
-            
-            try:
-                bot.edit_message_text(
-                    chat_id=user_id,
-                    message_id=call.message.message_id,
-                    text=text,
-                    parse_mode='Markdown',
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("🔄 Обновить", callback_data="leaderboard"),
-                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
-                    )
-                )
-            except:
-                bot.send_message(
-                    user_id,
-                    text,
-                    parse_mode='Markdown',
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("🔄 Обновить", callback_data="leaderboard"),
-                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
-                    )
-                )
-        
-        # --- ПРОМОКОД ---
-        elif call.data == "promocode":
-            try:
-                bot.edit_message_text(
-                    chat_id=user_id,
-                    message_id=call.message.message_id,
-                    text="🎫 **Введите промокод:**\nНапишите его в чат.",
-                    parse_mode='Markdown',
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
-                    )
-                )
-            except:
-                bot.send_message(
-                    user_id,
-                    "🎫 **Введите промокод:**\nНапишите его в чат.",
-                    parse_mode='Markdown',
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("🔙 Назад", callback_data="back")
-                    )
-                )
-            bot.register_next_step_handler(call.message, process_promocode)
-        
-        # --- НАЗАД ---
-        elif call.data == "back":
-            try:
-                bot.delete_message(user_id, call.message.message_id)
-            except:
-                pass
-            show_main_menu(user_id)
-        
-        # --- АДМИН ПАНЕЛЬ ---
-        elif call.data == "admin_back":
-            try:
-                bot.delete_message(user_id, call.message.message_id)
-            except:
-                pass
-            admin_panel(call.message)
-        
-        elif call.data == "admin_promocodes":
-            codes = get_all_promocodes()
-            text = "📊 **Список промокодов:**\n\n"
-            if codes:
-                for code, type, item_id, stars, uses in codes:
-                    text += f"🔑 Код: `{code}`\n"
-                    text += f"📌 Тип: {type}\n"
-                    if type == 'stars':
-                        text += f"⭐ Звезды: {stars:,}\n"
-                    else:
-                        text += f"🎁 Предмет: {item_id}\n"
-                    text += f"👥 Использований: {uses}\n"
-                    text += "➖➖➖➖➖➖➖\n"
-            else:
-                text += "Промокодов нет"
-            
-            keyboard = admin_menu_keyboard()
-            if codes:
-                for code, _, _, _, _ in codes:
-                    btn = types.InlineKeyboardButton(f"🗑 Удалить {code}", callback_data=f"admin_delete_promo_{code}")
-                    keyboard.add(btn)
-            
-            try:
-                bot.edit_message_text(
-                    chat_id=user_id,
-                    message_id=call.message.message_id,
-                    text=text,
-                    parse_mode='Markdown',
-                    reply_markup=keyboard
-                )
-            except:
-                bot.send_message(
-                    user_id,
-                    text,
-                    parse_mode='Markdown',
-                    reply_markup=keyboard
-                )
-        
-        elif call.data == "admin_create_promo":
-            text = """📝 **Создание промокода**
+        try:
+            bot.edit_message_text(
+                chat_id=user_id,
+                message_id=call.message.message_id,
+                text=text,
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+        except:
+            bot.send_message(
+                user_id,
+                text,
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_admin_promocodes: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_create_promo")
+def handle_admin_create_promo(call):
+    try:
+        user_id = call.message.chat.id
+        text = """📝 **Создание промокода**
 
 Введите данные в формате:
 `название_кода тип_награды параметр количество_использований`
@@ -1221,93 +1288,138 @@ def callback_handler(call):
 **Примеры:**
 `WELCOME stars 50 10` - 50 звезд, 10 использований
 `GIFT item premium_5 5` - Мега-подарок, 5 использований"""
-            
-            try:
-                bot.edit_message_text(
-                    chat_id=user_id,
-                    message_id=call.message.message_id,
-                    text=text,
-                    parse_mode='Markdown',
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("🔙 Назад", callback_data="admin_promocodes")
-                    )
-                )
-            except:
-                bot.send_message(
-                    user_id,
-                    text,
-                    parse_mode='Markdown',
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("🔙 Назад", callback_data="admin_promocodes")
-                    )
-                )
-            bot.register_next_step_handler(call.message, process_create_promo)
         
-        elif call.data.startswith("admin_delete_promo_"):
-            code = call.data.split("_")[3]
-            delete_promocode(code)
-            bot.answer_callback_query(call.id, "✅ Промокод удален!", show_alert=False)
-            
-            codes = get_all_promocodes()
-            text = "📊 **Список промокодов:**\n\n"
-            if codes:
-                for code, type, item_id, stars, uses in codes:
-                    text += f"🔑 Код: `{code}`\n"
-                    text += f"📌 Тип: {type}\n"
-                    if type == 'stars':
-                        text += f"⭐ Звезды: {stars:,}\n"
-                    else:
-                        text += f"🎁 Предмет: {item_id}\n"
-                    text += f"👥 Использований: {uses}\n"
-                    text += "➖➖➖➖➖➖➖\n"
-            else:
-                text += "Промокодов нет"
-            
-            keyboard = admin_menu_keyboard()
-            if codes:
-                for code, _, _, _, _ in codes:
-                    btn = types.InlineKeyboardButton(f"🗑 Удалить {code}", callback_data=f"admin_delete_promo_{code}")
-                    keyboard.add(btn)
-            
-            try:
-                bot.edit_message_text(
-                    chat_id=user_id,
-                    message_id=call.message.message_id,
-                    text=text,
-                    parse_mode='Markdown',
-                    reply_markup=keyboard
+        try:
+            bot.edit_message_text(
+                chat_id=user_id,
+                message_id=call.message.message_id,
+                text=text,
+                parse_mode='Markdown',
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔙 Назад", callback_data="admin_promocodes")
                 )
-            except:
-                bot.send_message(
-                    user_id,
-                    text,
-                    parse_mode='Markdown',
-                    reply_markup=keyboard
+            )
+        except:
+            bot.send_message(
+                user_id,
+                text,
+                parse_mode='Markdown',
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔙 Назад", callback_data="admin_promocodes")
                 )
+            )
+        bot.register_next_step_handler(call.message, process_create_promo)
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_admin_create_promo: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_delete_promo_"))
+def handle_admin_delete_promo(call):
+    try:
+        user_id = call.message.chat.id
+        code = call.data.split("_")[3]
+        delete_promocode(code)
+        bot.answer_callback_query(call.id, "✅ Промокод удален!", show_alert=False)
         
-        elif call.data == "admin_broadcast":
-            try:
-                bot.edit_message_text(
-                    chat_id=user_id,
-                    message_id=call.message.message_id,
-                    text="📢 **Рассылка**\nВведите текст для рассылки всем пользователям:",
-                    parse_mode='Markdown',
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
-                    )
-                )
-            except:
-                bot.send_message(
-                    user_id,
-                    "📢 **Рассылка**\nВведите текст для рассылки всем пользователям:",
-                    parse_mode='Markdown',
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
-                    )
-                )
-            bot.register_next_step_handler(call.message, process_broadcast)
+        codes = get_all_promocodes()
+        text = "📊 **Список промокодов:**\n\n"
+        if codes:
+            for code, type, item_id, stars, uses in codes:
+                text += f"🔑 Код: `{code}`\n"
+                text += f"📌 Тип: {type}\n"
+                if type == 'stars':
+                    text += f"⭐ Звезды: {stars:,}\n"
+                else:
+                    text += f"🎁 Предмет: {item_id}\n"
+                text += f"👥 Использований: {uses}\n"
+                text += "➖➖➖➖➖➖➖\n"
+        else:
+            text += "Промокодов нет"
         
-        elif call.data == "admin_cases":
+        keyboard = admin_menu_keyboard()
+        if codes:
+            for code, _, _, _, _ in codes:
+                btn = types.InlineKeyboardButton(f"🗑 Удалить {code}", callback_data=f"admin_delete_promo_{code}")
+                keyboard.add(btn)
+        
+        try:
+            bot.edit_message_text(
+                chat_id=user_id,
+                message_id=call.message.message_id,
+                text=text,
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+        except:
+            bot.send_message(
+                user_id,
+                text,
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_admin_delete_promo: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
+def handle_admin_broadcast(call):
+    try:
+        user_id = call.message.chat.id
+        try:
+            bot.edit_message_text(
+                chat_id=user_id,
+                message_id=call.message.message_id,
+                text="📢 **Рассылка**\nВведите текст для рассылки всем пользователям:",
+                parse_mode='Markdown',
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
+                )
+            )
+        except:
+            bot.send_message(
+                user_id,
+                "📢 **Рассылка**\nВведите текст для рассылки всем пользователям:",
+                parse_mode='Markdown',
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back")
+                )
+            )
+        bot.register_next_step_handler(call.message, process_broadcast)
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_admin_broadcast: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_cases")
+def handle_admin_cases(call):
+    try:
+        user_id = call.message.chat.id
+        keyboard = admin_cases_keyboard()
+        try:
+            bot.edit_message_text(
+                chat_id=user_id,
+                message_id=call.message.message_id,
+                text="🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+        except:
+            bot.send_message(
+                user_id,
+                "🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_admin_cases: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_toggle_case_"))
+def handle_admin_toggle_case(call):
+    try:
+        user_id = call.message.chat.id
+        case_id = call.data.split("_")[3]
+        new_status = toggle_case(case_id)
+        
+        if new_status is not None:
+            status_text = "включен" if new_status == 1 else "выключен"
+            bot.answer_callback_query(call.id, f"✅ Кейс {status_text}!", show_alert=False)
+            
             keyboard = admin_cases_keyboard()
             try:
                 bot.edit_message_text(
@@ -1324,40 +1436,10 @@ def callback_handler(call):
                     parse_mode='Markdown',
                     reply_markup=keyboard
                 )
-        
-        elif call.data.startswith("admin_toggle_case_"):
-            case_id = call.data.split("_")[3]
-            new_status = toggle_case(case_id)
-            
-            if new_status is not None:
-                status_text = "включен" if new_status == 1 else "выключен"
-                bot.answer_callback_query(call.id, f"✅ Кейс {status_text}!", show_alert=False)
-                
-                keyboard = admin_cases_keyboard()
-                try:
-                    bot.edit_message_text(
-                        chat_id=user_id,
-                        message_id=call.message.message_id,
-                        text="🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
-                        parse_mode='Markdown',
-                        reply_markup=keyboard
-                    )
-                except:
-                    bot.send_message(
-                        user_id,
-                        "🎮 **Управление кейсами**\nНажмите на кейс, чтобы включить/выключить:",
-                        parse_mode='Markdown',
-                        reply_markup=keyboard
-                    )
-            else:
-                bot.answer_callback_query(call.id, "❌ Ошибка при переключении кейса!", show_alert=True)
-    
+        else:
+            bot.answer_callback_query(call.id, "❌ Ошибка при переключении кейса!", show_alert=True)
     except Exception as e:
-        logger.error(f"❌ Ошибка в callback_handler: {e}")
-        try:
-            bot.answer_callback_query(call.id, f"❌ Ошибка: {str(e)}", show_alert=True)
-        except:
-            pass
+        logger.error(f"❌ Ошибка в handle_admin_toggle_case: {e}")
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =================
 def process_promocode(message):
